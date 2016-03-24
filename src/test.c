@@ -204,9 +204,11 @@ void uncoOnConnDel(uncoMsgHead_t* msg)
 
 }
 
-ucError_t uncoOnConn(uncoMsgHead_t* msg)
+#define MAXSEGS 1024
+#define MAXSEGSIZE (2048 - sizeof(uncoConn_t))
+ucError_t uncoOnConn(const uncoMsgHead_t* msg)
 {
-    uncoOnConnAdd(msg,)
+    uncoOnConnAdd(msg,MAXSEGS. MAXSEGSIZE);
 
 
     return ucENOERR;
@@ -242,47 +244,47 @@ ucError_t uncoOnPacket( const int8_t* packet, const i64 len)
 }
 
 
-
-
-static i64 connect_(int fd, const struct sockaddr *address,socklen_t address_len)
-{
-
-}
-
-u64 unco_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
-{
-
-}
-
-
-u64 unco_listen(int __fd, int __n)
-{
-
-}
-
-u64 unco_accept(int __fd, __SOCKADDR_ARG __addr, socklen_t *__restrict __addr_len)
-{
-
-}
-
-u64 unco_sendto(int __fd, const void *__buf, size_t __n, int __flags)
-{
-
-}
-
-
-
-u64 unco_send(int __fd, const void *__buf, size_t __n, int __flags)
-{
-
-}
-
-
-
-u64 unco_recv(int __fd, void *__buf, size_t __n, int __flags)
-{
-
-}
+//
+//
+//static i64 connect_(int fd, const struct sockaddr *address,socklen_t address_len)
+//{
+//
+//}
+//
+//u64 unco_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
+//{
+//
+//}
+//
+//
+//u64 unco_listen(int __fd, int __n)
+//{
+//
+//}
+//
+//u64 unco_accept(int __fd, __SOCKADDR_ARG __addr, socklen_t *__restrict __addr_len)
+//{
+//
+//}
+//
+//u64 unco_sendto(int __fd, const void *__buf, size_t __n, int __flags)
+//{
+//
+//}
+//
+//
+//
+//u64 unco_send(int __fd, const void *__buf, size_t __n, int __flags)
+//{
+//
+//}
+//
+//
+//
+//u64 unco_recv(int __fd, void *__buf, size_t __n, int __flags)
+//{
+//
+//}
 
 
 
