@@ -90,6 +90,7 @@ bool test3()
     return result;
 }
 
+
 bool test4()
 {
     #define datalen 7
@@ -100,34 +101,74 @@ bool test4()
     const char data[datalen] = "123456";
     i64 len = datalen;
 
-    for(int test = 0; test < 5; test++){
-        for(int i = 0; i < total; i++){
-
-            err = cQPushNext(cq,(i8*)data,&len);
-            CQ_ASSERT(err == cqENOERR);
-            CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
-        }
-
-        cqSlot_t* slot = NULL;
-        i64 idx = -1;
-        err = cqGetNextWr(cq,&slot,&idx);
-        CQ_ASSERT(err == cqENOSLOT);
-        CQ_ASSERT(slot == NULL);
-        CQ_ASSERT(idx == -1);
-        CQ_ASSERT(cq->wrIdx == 0 );
-
-
-        for(int i = total - 1; i >= 0; i--){
-            err = cqReleaseSlotWr(cq,i);
-            CQ_ASSERT(err == cqEWRONGSLOT);
-        }
+    for(int i = 0; i < total; i++){
+        err = cQPushNext(cq,(i8*)data,&len);
+        CQ_ASSERT(err == cqENOERR);
+        CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
     }
+
+    cqSlot_t* slot = NULL;
+    i64 idx = -1;
+    err = cqGetNextWr(cq,&slot,&idx);
+    CQ_ASSERT(err == cqENOSLOT);
+    CQ_ASSERT(slot == NULL);
+    CQ_ASSERT(idx == -1);
+    CQ_ASSERT(cq->wrIdx == 0 );
+
+
+    for(int i = total - 1; i >= 0; i--){
+        err = cqReleaseSlotWr(cq,i);
+        CQ_ASSERT(err == cqEWRONGSLOT);
+    }
+
     cqDelete(cq);
     return result;
 }
 
 
+bool test5()
+{
+    #define datalen 7
+    bool result = true;
+    const i64 total = 5;
+    cqError_t err = cqENOERR;
+    cq_t* cq = cqNew(datalen,total);
+    const char data[datalen] = "123456";
+    i64 len = datalen;
 
+    for(int i = 0; i < total; i++){
+        err = cQPushNext(cq,(i8*)data,&len);
+        CQ_ASSERT(err == cqENOERR);
+        CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
+    }
+
+    cqSlot_t* slot = NULL;
+    i64 idx = -1;
+    err = cqGetNextWr(cq,&slot,&idx);
+    CQ_ASSERT(err == cqENOSLOT);
+    CQ_ASSERT(slot == NULL);
+    CQ_ASSERT(idx == -1);
+    CQ_ASSERT(cq->wrIdx == 0 );
+
+
+    i8 readbuff[8];
+    for(int i = 0; i < total; i++){
+        err = cqPullNext(cq,(i8*)readbuff,&len);
+        CQ_ASSERT(err == cqENOERR);
+        CQ_ASSERT(cq->rdIdx == i +1 || cq->rdIdx == 0 );
+    }
+
+    err = cqPullNext(cq,(i8*)readbuff,&len);
+    CQ_ASSERT(err == cqENOSLOT);
+    CQ_ASSERT(slot == NULL);
+    CQ_ASSERT(idx == -1);
+    CQ_ASSERT(cq->wrIdx == 0 );
+
+
+
+    cqDelete(cq);
+    return result;
+}
 
 
 int main(int argc, char** argv)
@@ -140,5 +181,6 @@ int main(int argc, char** argv)
     printf("CH Data Structures: Array Test 02: ");  printf("%s", (test_pass = test2()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     printf("CH Data Structures: Array Test 03: ");  printf("%s", (test_pass = test3()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     printf("CH Data Structures: Array Test 04: ");  printf("%s", (test_pass = test4()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("CH Data Structures: Array Test 05: ");  printf("%s", (test_pass = test5()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     return 0;
 }

@@ -25,7 +25,7 @@ CFLAGS="-D_GNU_SOURCE -D_XOPEN_SOURCE=700 -D_BSD_SOURCE -std=c11 -Werror -Wall -
 #CFLAGS="-std=c11 -Werror -Wall -Wextra -pedantic -Wno-missing-field-initializers"
 LINKFLAGS=""
 
-SRC="src/CircularQueueTest.c"
+SRC="src/test.c"
 cake $SRC \
     --append-CFLAGS="$INCLUDES $CFLAGS" \
     --append-LINKFLAGS="$LINKFLAGS" \

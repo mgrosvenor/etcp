@@ -1,7 +1,12 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/socket.h>
+#include <string.h>
+#include <stdbool.h>
+
 
 #include "CircularQueue.h"
 #include "types.h"
@@ -51,19 +56,125 @@ _Static_assert(sizeof(uncoMsgHead_t) == 128, "The UnCo mesage header is assumed 
 
 
 typedef struct {
+    bool connected;
+    i64 src;
+    i64 dst;
     i64 seq;
+    cq_t* rdcq;
+    cq_t* wrcq;
+    cq_t* accq;
+} uncoConn_t;
 
-} unco_t;
+
+#define MAXCONNS 1024
+typedef struct {
+    uncoConn_t conns[MAXCONNS];
+} uncoState_t;
+
+uncoState_t uncoState;
 
 
-static i64 handle_packet(unco_t* unco, const int8_t* packet, const i64 len)
+typedef enum {
+    ucENOERR,       //Success!
+    ucENOMEM,       //Ran out of memory
+    ucBADPKT,       //Bad packet, not enough bytes for a header
+    ucEALREADY,     //Already connected!
+    ucETOOMANY,     //Too many connections, we've run out!
+} ucError_t;
+
+
+void uncoConnDelete(uncoConn_t* uc)
 {
-    if(len < sizeof(uncoMsgHead_t)){
-        return -1; //Bad packet, not enough data in it
+    if(!uc){ return; }
+
+    if(uc->accq){ cqDelete(uc->accq); }
+    if(uc->wrcq){ cqDelete(uc->wrcq); }
+    if(uc->rdcq){ cqDelete(uc->rdcq); }
+
+}
+
+
+ucError_t uncoConnNew(uncoConn_t* conn, i64 windowSize, i64 buffSize, i64 src, i64 dst, )
+{
+    if(!conn){ return ucENOMEM; }
+
+    conn->rdcq = cqNew(buffSize,windowSize);
+    if(!conn->rdcq){
+        uncoConnDelete(conn);
+        return ucENOMEM;
     }
 
-    uncoMsgHead_t* msg =
+    conn->wrcq = cqNew(buffSize,windowSize);
+    if(!conn->wrcq){
+        uncoConnDelete(conn);
+        return ucENOMEM;
+    }
 
+    conn->src = src;
+    conn->dst = dst;
+
+    return ucENOERR;
+}
+
+
+
+ucError_t uncoOnConn(uncoMsgHead_t* msg)
+{
+    //First, check the connection doesn't yet exist
+    for(i64 i = 0; i < MAXCONNS; i++){
+        if(uncoState.conns[i].connected){
+            if(uncoState.conns[i].src == msg->src && uncoState.conns[i].dst == msg->dst){
+                return ucEALREADY;
+            }
+        }
+    }
+
+    //If we've got here this is a new connection
+    i64 i = 0;
+    for( ; i < MAXCONNS; i++){
+        if(!uncoState.conns[i].connected){
+            break;
+        }
+    }
+    if(i >= MAXCONNS ){
+        return ucETOOMANY;
+    }
+
+    uncoConn_t* conn = &uncoState.conns[i];
+    uncoConnNew(conn);
+
+
+
+    return ucENOERR;
+}
+
+
+
+ucError_t uncoOnPacket( const int8_t* packet, const i64 len)
+{
+    if(len < (i64)sizeof(uncoMsgHead_t)){
+        return ucBADPKT; //Bad packet, not enough data in it
+    }
+
+    const uncoMsgHead_t* msg = (uncoMsgHead_t*) packet;
+
+    if(msg->typeFlags & UNCO_CON){
+        uncoOnConn(msg);
+    }
+
+    if(msg->typeFlags & UNCO_ACK){
+        //Do acknowledgement processing here
+    }
+
+    if(msg->typeFlags & UNCO_DAT){
+        //Do message processing here
+    }
+
+    if(msg->typeFlags & UNCO_FIN){
+        //Do finish processing here
+    }
+
+    return ucENOERR;
 }
 
 

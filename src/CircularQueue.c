@@ -86,8 +86,6 @@ cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len)
     }
 
     slot->len     = len;
-    cq->wrIdx++;
-    cq->wrIdx %= cq->slotCount;
 
     __asm__ __volatile__ ("mfence");
     slot->__state = cqSTREADY; //This must happen last! At this point, it is committed!
@@ -149,7 +147,6 @@ cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
             slot->__state = cqSTINUSERD;
             cq->rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
             *slotIdx_o = idx;
-            printf("Got a free slot at index %li, new index = %li\n", idx,cq->rdIdx);
             *slot_o = slot;
             return cqENOERR;
         }
