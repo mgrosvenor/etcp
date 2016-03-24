@@ -11,6 +11,7 @@
 #include "CircularQueue.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static inline i64 min(i64 lhs, i64 rhs)
 {
@@ -28,7 +29,9 @@ cq_t* cqNew(i64 buffSize, i64 slotCount)
     result->slotCount    = slotCount;
     result->slotDataSize = buffSize;
     result->slotSize     = buffSize + sizeof(cqSlot_t);
-    result->slotSize     = (result->slotSize + sizeof(uint64_t)) & ~(sizeof(uint64_t)); //Round up nearest word size
+    result->slotSize     = (result->slotSize + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) -1 ); //Round up nearest word size
+
+    //printf("Allocating %li slots of size %li for %liB\n", slotCount, result->slotSize, slotCount * result->slotSize);
     result->slots        = calloc(slotCount, result->slotSize);
     if(!result->slots){
         cqDelete(result);
@@ -51,12 +54,13 @@ cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
     const i64 slotCount = cq->slotCount;
 
     for(i64 i = 0; i < slotCount; i++){
-        const i64 idx = (cq->rdIdx + i) % slotCount;
+        const i64 idx = cq->wrIdx + i < slotCount ? cq->wrIdx + i : cq->wrIdx + i - slotCount;
         cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
         if(slot->__state == cqSTFREE){
             slot->__state = cqSTINUSEWR;
-            cq->rdIdx = i;
-            *slotIdx_o = i;
+            cq->wrIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
+            //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
+            *slotIdx_o = idx;
             *slot_o = slot;
             return cqENOERR;
         }
@@ -82,12 +86,31 @@ cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len)
     }
 
     slot->len     = len;
-    cq->rdIdx++;
-    cq->rdIdx %= cq->slotCount;
+    cq->wrIdx++;
+    cq->wrIdx %= cq->slotCount;
 
     __asm__ __volatile__ ("mfence");
     slot->__state = cqSTREADY; //This must happen last! At this point, it is committed!
     return cqENOERR;
+}
+
+cqError_t cqReleaseSlotWr(cq_t* cq, i64 slotIdx)
+{
+    if(slotIdx < 0 || slotIdx > cq->slotCount){
+            return cqERANGE;
+        }
+
+        cqSlot_t* slot = (cqSlot_t*)(cq->slots +  slotIdx * cq->slotSize);
+        if(slot->__state != cqSTINUSEWR){
+            return cqEWRONGSLOT;
+        }
+        slot->len     = cq->slotDataSize;
+        //Set this to the current index, since it's now free, it's guaranteed to be writable in the future.
+        cq->wrIdx     = slotIdx;
+
+        __asm__ __volatile__ ("mfence");
+        slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
+        return cqENOERR;
 }
 
 
@@ -120,12 +143,13 @@ cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
     const i64 slotCount = cq->slotCount;
 
     for(i64 i = 0; i < slotCount; i++){
-        const i64 idx = (cq->rdIdx + i) % slotCount;
+        const i64 idx = cq->rdIdx + i < slotCount ? cq->rdIdx + i : cq->rdIdx + i - slotCount;
         cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
         if(slot->__state == cqSTREADY){
             slot->__state = cqSTINUSERD;
-            cq->wrIdx = i;
-            *slotIdx_o = i;
+            cq->rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
+            *slotIdx_o = idx;
+            printf("Got a free slot at index %li, new index = %li\n", idx,cq->rdIdx);
             *slot_o = slot;
             return cqENOERR;
         }
@@ -134,7 +158,7 @@ cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
     return cqENOSLOT;
 }
 
-cqError_t cqReleaseSlot(const cq_t* cq, i64 slotIdx)
+cqError_t cqReleaseSlotRd(cq_t* cq, i64 slotIdx)
 {
     if(slotIdx < 0 || slotIdx > cq->slotCount){
             return cqERANGE;
@@ -144,17 +168,14 @@ cqError_t cqReleaseSlot(const cq_t* cq, i64 slotIdx)
         if(slot->__state != cqSTINUSERD){
             return cqEWRONGSLOT;
         }
-
         slot->len     = cq->slotDataSize;
-        cq->wrIdx++;
-        cq->wrIdx %= cq->slotCount;
 
         __asm__ __volatile__ ("mfence");
         slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
         return cqENOERR;
 }
 
-cqError_t cqPullNext(const cq_t* cq, i8* data, i64* len_io)
+cqError_t cqPullNext(cq_t* cq, i8* data, i64* len_io)
 {
     cqSlot_t* slot = NULL;
     i64 idx = -1;
@@ -168,7 +189,7 @@ cqError_t cqPullNext(const cq_t* cq, i8* data, i64* len_io)
     *len_io = toCopy;
     memcpy(data,slot->buff,toCopy);
 
-    cqReleaseSlot(cq,idx);
+    cqReleaseSlotRd(cq,idx);
 
     if(toCopy < slot->len){
         return cqETRUNC;
@@ -191,18 +212,27 @@ void cqDelete(cq_t* cq)
     free(cq);
 }
 
-char erros[cqECOUNT] = {
+
+char* errors[cqECOUNT] = {
     "Success! No error",
     "No memory available",
     "No slots available",
     "Payload was truncated",
+    "Value is out of range",
+    "Wrong slot selected",
+    "PANIC! INTERNAL MEMROY OVERWRITTEN",
+
 };
 
 
 //Convert a cqError number into a text description
 const char* cqError2Str(cqError_t err)
 {
+    if(err >= cqECOUNT){
+        return "Bad error number";
+    }
 
+    return errors[err];
 }
 
 

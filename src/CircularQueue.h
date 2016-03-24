@@ -41,7 +41,7 @@ typedef struct {
     i64 slotCount;
     i64 rdIdx;
     i64 wrIdx;
-    cqSlot_t* slots;
+    i8* slots;
 } cq_t;
 
 
@@ -88,6 +88,14 @@ cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
  */
 cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len);
 
+/**
+ * @brief           Tell the CQ that the slot is empty.
+ * @param cq        The CQ structure we're operating on
+ * @param slot      The slot to commit to the data to.
+ * @return          ESUCCESS
+ */
+cqError_t cqReleaseSlotWr(cq_t* cq, i64 slotIdx);
+
 
 /**
  * @brief       Equivalent to GetNext, memcopy, CommitSlot.
@@ -113,12 +121,12 @@ cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
 
 
 /**
- * @brief           Tell the CQ that the slot is ready to be read. After this, no more changes can be made
+ * @brief           Tell the CQ that the slot is empty.
  * @param cq        The CQ structure we're operating on
  * @param slot      The slot to commit to the data to.
  * @return          ESUCCESS
  */
-cqError_t cqReleaseSlot(cq_t* cq, cqSlot_t* slot);
+cqError_t cqReleaseSlotRd(cq_t* cq, i64 slotIdx);
 
 
 /**
