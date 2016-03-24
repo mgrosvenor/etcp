@@ -10,6 +10,7 @@
 
 #include "CircularQueue.h"
 #include "types.h"
+#include "spooky_hash.h"
 
 
 
@@ -54,8 +55,9 @@ typedef struct __attribute__((packed)){
 
 _Static_assert(sizeof(uncoMsgHead_t) == 128, "The UnCo mesage header is assumed to be 128 bytes");
 
+typedef struct uncoConn uncoConn_t;
 
-typedef struct {
+struct uncoConn {
     bool connected;
     i64 src;
     i64 dst;
@@ -63,15 +65,17 @@ typedef struct {
     cq_t* rdcq;
     cq_t* wrcq;
     cq_t* accq;
-} uncoConn_t;
+    uncoConn_t* next;
+};
 
 
-#define MAXCONNS 1024
+#define MAXCONNSPOW 10ULL //(2^10 = 1024 buckets)
+#define MAXCONNS (1 << MAXCONNSPOW)
 typedef struct {
-    uncoConn_t conns[MAXCONNS];
+    uncoConn_t* conns[MAXCONNS];
 } uncoState_t;
 
-uncoState_t uncoState;
+uncoState_t uncoState = {0};
 
 
 typedef enum {
@@ -91,58 +95,118 @@ void uncoConnDelete(uncoConn_t* uc)
     if(uc->wrcq){ cqDelete(uc->wrcq); }
     if(uc->rdcq){ cqDelete(uc->rdcq); }
 
+    free(uc);
+
 }
 
 
-ucError_t uncoConnNew(uncoConn_t* conn, i64 windowSize, i64 buffSize, i64 src, i64 dst, )
+uncoConn_t* uncoConnNew(i64 windowSize, i64 buffSize, i64 src, i64 dst )
 {
-    if(!conn){ return ucENOMEM; }
+    uncoConn_t* conn = calloc(1, sizeof(uncoConn_t));
+    if(!conn){ return NULL; }
 
     conn->rdcq = cqNew(buffSize,windowSize);
     if(!conn->rdcq){
         uncoConnDelete(conn);
-        return ucENOMEM;
+        return NULL;
     }
 
     conn->wrcq = cqNew(buffSize,windowSize);
     if(!conn->wrcq){
         uncoConnDelete(conn);
-        return ucENOMEM;
+        return NULL;
     }
 
     conn->src = src;
     conn->dst = dst;
 
+    return conn;
+}
+
+
+i64 getHashKey(uncoMsgHead_t* msg)
+{
+    i64 hash64 = spooky_Hash64(&msg->src,sizeof(msg->src) * 2, 0xB16B00B1E5FULL);
+    return (hash64 * 11400714819323198549ul) >> (64 - MAXCONNSPOW);
+}
+
+
+ucError_t uncoOnConnAdd(uncoMsgHead_t* msg, i64 windowSegs, i64 segSize, i64 src, i64 dst)
+{
+    const i64 idx = getHashKey(msg);
+    uncoConn_t* conn = uncoState.conns[idx];
+    if(conn){
+        if(conn->src == msg->src && conn->dst == msg->dst){
+            return ucEALREADY;
+        }
+
+        //Something already in the hash table, traverse to the end
+        for(; conn->next; conn = conn->next){}{
+            if(conn->src == msg->src && conn->dst == msg->dst){
+                return ucEALREADY;
+            }
+        }
+
+        conn->next = uncoConnNew(windowSegs, segSize, src, dst);
+    }
+    else{
+        conn = uncoConnNew(windowSegs, segSize, src, dst);
+        uncoState.conns[idx] = conn;
+    }
+
     return ucENOERR;
 }
 
 
+uncoConn_t* uncoOnConnGet(uncoMsgHead_t* msg)
+{
+    const i64 idx = getHashKey(msg);
+    uncoConn_t* conn = uncoState.conns[idx];
+    if(!conn){
+        return NULL;
+    }
+
+    if(conn->src == msg->src && conn->dst == msg->dst){
+        return conn;
+    }
+
+    //Something already in the hash table, traverse to the end
+    for(; conn->next; conn = conn->next){}{
+        if(conn->src == msg->src && conn->dst == msg->dst){
+            return conn;
+        }
+    }
+}
+
+
+void uncoOnConnDel(uncoMsgHead_t* msg)
+{
+    const i64 idx = getHashKey(msg);
+    uncoConn_t* conn = uncoState.conns[idx];
+    if(!conn){
+        return;
+    }
+
+    if(conn->src == msg->src && conn->dst == msg->dst){
+        uncoState.conns[idx] = conn->next;
+        uncoConnDelete(conn);
+    }
+
+    //Something already in the hash table, traverse to the end
+    uncoConn_t* prev = conn;
+    for(; conn->next; conn = conn->next){}{
+        if(conn->src == msg->src && conn->dst == msg->dst){
+            prev->next = conn->next;
+            uncoConnDelete(conn);
+        }
+        prev = conn;
+    }
+
+}
 
 ucError_t uncoOnConn(uncoMsgHead_t* msg)
 {
-    //First, check the connection doesn't yet exist
-    for(i64 i = 0; i < MAXCONNS; i++){
-        if(uncoState.conns[i].connected){
-            if(uncoState.conns[i].src == msg->src && uncoState.conns[i].dst == msg->dst){
-                return ucEALREADY;
-            }
-        }
-    }
-
-    //If we've got here this is a new connection
-    i64 i = 0;
-    for( ; i < MAXCONNS; i++){
-        if(!uncoState.conns[i].connected){
-            break;
-        }
-    }
-    if(i >= MAXCONNS ){
-        return ucETOOMANY;
-    }
-
-    uncoConn_t* conn = &uncoState.conns[i];
-    uncoConnNew(conn);
-
+    uncoOnConnAdd(msg,)
 
 
     return ucENOERR;
