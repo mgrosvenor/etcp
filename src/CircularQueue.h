@@ -39,9 +39,11 @@ typedef struct {
     i64 slotSize;
     i64 slotDataSize;
     i64 slotCount;
-    i64 rdIdx;
-    i64 wrIdx;
-    i8* slots;
+    i64 rdSlotsUsed;
+    i64 wrSlotsUsed;
+    i64 _rdIdx;
+    i64 _wrIdx;
+    i8* _slots;
 } cq_t;
 
 
@@ -67,7 +69,7 @@ typedef enum {
  * @param slotCount The number of slots in this queue.
  * @return          On success a new a pointer to a new cq_t structure. On failure, NULL will be returned
  */
-cq_t* cqNew(i64 buffSize, i64 slotCount);
+cq_t* cqNew(const i64 buffSize, const i64 slotCount);
 
 
 /**
@@ -78,7 +80,7 @@ cq_t* cqNew(i64 buffSize, i64 slotCount);
  * @return          A cqError code this may be ENOERR, which indicates that slot_o is a valid pointer or ENOSLOT which
  *                  indicates that there are no free slots.
  */
-cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
+cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o);
 
 /**
  * @brief           Try to get a writing slot at a specific index. This breaks the circular nature of the ring..
@@ -87,15 +89,7 @@ cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
  * @param slotIdx   The index to try
  * @return
  */
-cqError_t cqGetNextWrIdx(cq_t* cq, cqSlot_t** slot_o, i64 slotIdx);
-
-/**
- * @brief           Tell the CQ that the slot is ready to be read. After this, no more changes can be made
- * @param cq        The CQ structure we're operating on
- * @param slot      The slot to commit to the data to.
- * @return
- */
-cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len);
+cqError_t cqGetNextWrIdx(cq_t*const cq, cqSlot_t** const slot_o, const i64 slotIdx);
 
 /**
  * @brief           Tell the CQ that the slot is empty.
@@ -103,19 +97,37 @@ cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len);
  * @param slot      The slot to commit to the data to.
  * @return          ESUCCESS
  */
-cqError_t cqReleaseSlotWr(cq_t* cq, i64 slotIdx);
+cqError_t cqReleaseSlotWr(cq_t* const cq, i64 const slotIdx);
 
 
 /**
- * @brief       Equivalent to GetNext, memcopy, CommitSlot.
+ * @brief       Equivalent to GetNext and memcopy
  * @param cq    The CQ structure that we're operating on
  * @param data  Data that you wish to have copied into the slot
  * @param len   Length of the data, this must be less than slot size. If it is too big, ETRUNC will be returned and len will
  *              will be set to the number of bytes actually copied
  * @return
  */
-cqError_t cQPushNext(cq_t* cq, i8* data, i64* len);
+cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len);
 
+/**
+ * @brief       Equivalent to GetNextIdx and memcopy
+ * @param cq    The CQ structure that we're operating on
+ * @param data  Data that you wish to have copied into the slot
+ * @param len   Length of the data, this must be less than slot size. If it is too big, ETRUNC will be returned and len will
+ *              will be set to the number of bytes actually copied
+ * @return
+ */
+cqError_t cqPushIdx(cq_t* const cq, const void* __restrict data, i64* const len, const i64 idx);
+
+
+/**
+ * @brief           Tell the CQ that the slot is ready to be read. After this, no more changes can be made
+ * @param cq        The CQ structure we're operating on
+ * @param slot      The slot to commit to the data to.
+ * @return
+ */
+cqError_t cqCommitSlot(cq_t* const cq, const i64 slotIdx, const i64 len);
 
 
 /**
@@ -126,7 +138,7 @@ cqError_t cQPushNext(cq_t* cq, i8* data, i64* len);
  * @return          A cqError code this may be ENOERR, which indicates that slot_o is a valid pointer or ENOSLOT which
  *                  indicates that there are no slots to read.
  */
-cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
+cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o);
 
 
 /**
@@ -135,7 +147,7 @@ cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
  * @param slot      The slot to commit to the data to.
  * @return          ESUCCESS
  */
-cqError_t cqReleaseSlotRd(cq_t* cq, i64 slotIdx);
+cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx);
 
 
 /**
@@ -145,7 +157,7 @@ cqError_t cqReleaseSlotRd(cq_t* cq, i64 slotIdx);
  * @param len   Length of the data area,
  * @return      ESUCCESS, ETURNC
  */
-cqError_t cqPullNext(cq_t* cq, i8* data, i64* len_io);
+cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io);
 
 
 
@@ -153,10 +165,10 @@ cqError_t cqPullNext(cq_t* cq, i8* data, i64* len_io);
  * Free memory resoruces associated with this CQ
  * @param cq
  */
-void cqDelete(cq_t* cq);
+void cqDelete(cq_t* const cq);
 
 //Convert a cqError number into a text description
-const char* cqError2Str(cqError_t err);
 
+const char* cqError2Str(cqError_t const err);
 
 #endif /* CIRCULARQUEUE_H_ */

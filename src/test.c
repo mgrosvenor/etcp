@@ -6,11 +6,12 @@
 #include <sys/socket.h>
 #include <string.h>
 #include <stdbool.h>
-
+#include <linux/if_ether.h>
 
 #include "CircularQueue.h"
 #include "types.h"
 #include "spooky_hash.h"
+#include "debug.h"
 
 
 
@@ -26,13 +27,16 @@ enum {
 
 
 typedef struct __attribute__((packed)){
-    i64 start;
-    i64 stop;
+    uint16_t start; //At most 65K segments per window
+    uint16_t stop;
 } sackField_t;
 
 
-#define UNCO_MAX_SACK 5
+#define UNCO_MAX_SACK 9 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
 typedef struct __attribute__((packed)){
+    i64 sackBase;
+    i64 sackCount;
+    i64 rxWindow;
     sackField_t sacks[UNCO_MAX_SACK];
 } sack_t;
 
@@ -53,20 +57,23 @@ typedef struct __attribute__((packed)){
     dat_t data;     //This MUST come last,data follows
 } uncoMsgHead_t;
 
-_Static_assert(sizeof(uncoMsgHead_t) == 128, "The UnCo mesage header is assumed to be 128 bytes");
+_Static_assert(sizeof(uncoMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 20B of ethernet header + VLAN");
 
 typedef struct uncoConn uncoConn_t;
 
 struct uncoConn {
     bool connected;
-    i64 src;
-    i64 dst;
-    i64 seqAck;
-    i64 seqRx;
-    cq_t* rxcq;
-    cq_t* txcq;
-    uncoConn_t* next;
-    uncoMsgHead_t ackInProgress;
+    i64 src;    //Identifiers for this flow
+    i64 dst;    //Identifiers for this flow
+    uncoConn_t* next; //For chaining in the hashtable
+
+    cq_t* rxcq; //Queue for incoming packets
+    cq_t* txcq; //Queue for outgoing packets
+
+    i64 seqAck; //The current acknowledge sequence number
+
+
+
 };
 
 
@@ -86,6 +93,9 @@ typedef enum {
     ucEALREADY,     //Already connected!
     ucETOOMANY,     //Too many connections, we've run out!
     ucNOTCONN,      //Not connected to anything
+    ucECQERR,       //Some issue with a Circular Queue
+    ucERANGE,       //Out of range
+    ucETOOBIG,      //The payload is too big for this buffer
 } ucError_t;
 
 
@@ -159,7 +169,7 @@ ucError_t uncoOnConnAdd(const uncoMsgHead_t* msg, i64 windowSegs, i64 segSize)
 }
 
 
-uncoConn_t* uncoOnConnGet(uncoMsgHead_t* msg)
+uncoConn_t* uncoOnConnGet(const uncoMsgHead_t* msg)
 {
     const i64 idx = getHashKey(msg);
     uncoConn_t* conn = uncoState.conns[idx];
@@ -223,6 +233,7 @@ ucError_t uncoOnConn(const uncoMsgHead_t* msg)
 
 ucError_t uncoOnDat(const uncoMsgHead_t* msg)
 {
+    DBG("Working on new data message\n");
     uncoConn_t* conn = uncoOnConnGet(msg);
     if(!conn){
         printf("Error data packet for invalid connection\n");
@@ -230,41 +241,80 @@ ucError_t uncoOnDat(const uncoMsgHead_t* msg)
     }
 
     const i64 rxQSlotCount  = conn->rxcq->slotCount;
-    const i64 seq           = msg->data.seqNum;
+    const i64 seqPkt        = msg->data.seqNum;
     const i64 seqMin        = conn->seqAck;
     const i64 seqMax        = conn->seqAck + rxQSlotCount;
-    const i64 seqIdx        = seq % rxQSlotCount;
+    const i64 seqIdx        = seqPkt % rxQSlotCount;
+    DBG("SlotCount = %li, seqPkt = %li, seqMin= %li, seqMax = %li, seqIdx = %li\n",
+        rxQSlotCount,
+        seqPkt,
+        seqMin,
+        seqMax,
+        seqIdx
+    );
 
     //When we receive a packet, it must be between seqMin and seqMax
     //-- if seq < seqMin, it has already been ack'd
-    //-- if seq >= seqMax, the buffer is full
-    //If the packet is in the right range, then the sequence number should determine the slot in the ring
-    //If the slot is already full, this is a duplicate packet and the acknowledgement is delayed/missing
-    //If the sequence number is greater than the seqMin, then a packet has gone missing somewhere
+    //-- if seq >= seqMax, it is beyond the end of the rx window
+    if(seqPkt < seqMin){
+        WARN("Ignoring packet, seqPkt %li < %li seqMin, packet has already been ack'd\n", seqPkt, seqMin);
+        return ucERANGE;
+    }
 
+    if(seqPkt > seqMax){
+        WARN("Ignoring packet, seqPkt %li > %li seqMax, packet will not fit in window\n", seqPkt, seqMax);
+        return ucERANGE;
+    }
 
-    while(seq % rxQSlotCount != idx))
-
+    i64 toCopy = msg->data.datLen + sizeof(uncoMsgHead_t);
+    i64 toCopyTmp = toCopy;
+    cqError_t err = cqPushIdx(conn->rxcq,msg,&toCopyTmp,seqIdx);
+    if(err != cqENOERR){
+        if(err == cqETRUNC){
+            WARN("Payload (%liB) is too big for slot (%liB), truncating\n", toCopy, toCopyTmp );
+        }
+        else{
+            WARN("Error inserting into Circular Queue: %s", cqError2Str(err));
+            return ucECQERR;
+        }
+    }
 
     return ucENOERR;
 }
 
-
-
-ucError_t uncoOnPacket( const int8_t* packet, const i64 len)
+ucError_t uncoOnDat(const uncoMsgHead_t* msg)
 {
-    if(len < (i64)sizeof(uncoMsgHead_t)){
+    DBG("Working on new data message\n");
+    uncoConn_t* conn = uncoOnConnGet(msg);
+    if(!conn){
+
+
+
+
+ucError_t uncoOnPacket( const void* const packet, const i64 len)
+{
+    //First sanity check the packet
+    const i64 minSizeHdr = sizeof(uncoMsgHead_t);
+    if(len < minSizeHdr){
+        WARN("Not enough bytes to parse header\n");
+        return ucBADPKT; //Bad packet, not enough data in it
+    }
+    const uncoMsgHead_t* msg = (uncoMsgHead_t*)packet;
+
+    const i64 minSizeDat = minSizeHdr + msg->data.datLen;
+    if(len < minSizeDat){
+        WARN("Not enough bytes to parse data\n");
         return ucBADPKT; //Bad packet, not enough data in it
     }
 
-    const uncoMsgHead_t* msg = (uncoMsgHead_t*) packet;
-
+    //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
+    //in one.
     if(msg->typeFlags & UNCO_CON){
         uncoOnConn(msg);
     }
 
     if(msg->typeFlags & UNCO_ACK){
-        //Do acknowledgement processing here
+        uncoOnAck(msg);
     }
 
     if(msg->typeFlags & UNCO_DAT){
@@ -272,7 +322,7 @@ ucError_t uncoOnPacket( const int8_t* packet, const i64 len)
     }
 
     if(msg->typeFlags & UNCO_FIN){
-        //Do finish processing here
+
     }
 
     return ucENOERR;
