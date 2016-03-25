@@ -51,27 +51,57 @@ cq_t* cqNew(i64 buffSize, i64 slotCount)
 
 cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
 {
-    const i64 slotCount = cq->slotCount;
-
-    for(i64 i = 0; i < slotCount; i++){
-        const i64 idx = cq->wrIdx + i < slotCount ? cq->wrIdx + i : cq->wrIdx + i - slotCount;
-        cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
-        if(slot->__state == cqSTFREE){
-            slot->__state = cqSTINUSEWR;
-            cq->wrIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-            //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
-            *slotIdx_o = idx;
-            *slot_o = slot;
-            return cqENOERR;
-        }
+    if(cq == NULL || slot_o == NULL || slotIdx_o == NULL){
+        return cqNULLPARAM;
     }
 
-    return cqENOSLOT;
+    const i64 slotCount = cq->slotCount;
+    const i64 idx = cq->wrIdx + 1 < slotCount ? cq->wrIdx + 1 : cq->wrIdx + 1 - slotCount;
+    cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
+    if(slot->__state != cqSTFREE){
+        return cqENOSLOT;
+    }
+
+    slot->__state = cqSTINUSEWR;
+    cq->wrIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
+    //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
+    *slotIdx_o = idx;
+    *slot_o = slot;
+    return cqENOERR;
+}
+
+cqError_t cqGetNextWrIdx(cq_t* cq, cqSlot_t** slot_o, i64 slotIdx)
+{
+
+    if(cq == NULL || slot_o == NULL){
+        return cqNULLPARAM;
+    }
+
+    const i64 idx       = slotIdx;
+    const i64 slotCount = cq->slotCount;
+
+    if(idx > slotCount || idx < 0){
+        return cqERANGE;
+    }
+
+    cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
+    if(slot->__state != cqSTFREE){
+        return cqENOSLOT;
+    }
+
+    slot->__state = cqSTINUSEWR;
+    //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
+    *slot_o = slot;
+    return cqENOERR;
 }
 
 
 cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len)
 {
+    if(cq == NULL){
+        return cqNULLPARAM;
+    }
+
     if(slotIdx < 0 || slotIdx > cq->slotCount){
         return cqERANGE;
     }
@@ -94,26 +124,35 @@ cqError_t cqCommitSlot(cq_t* cq, i64 slotIdx, i64 len)
 
 cqError_t cqReleaseSlotWr(cq_t* cq, i64 slotIdx)
 {
+    if(cq == NULL){
+        return cqNULLPARAM;
+    }
+
     if(slotIdx < 0 || slotIdx > cq->slotCount){
-            return cqERANGE;
-        }
+        return cqERANGE;
+    }
 
-        cqSlot_t* slot = (cqSlot_t*)(cq->slots +  slotIdx * cq->slotSize);
-        if(slot->__state != cqSTINUSEWR){
-            return cqEWRONGSLOT;
-        }
-        slot->len     = cq->slotDataSize;
-        //Set this to the current index, since it's now free, it's guaranteed to be writable in the future.
-        cq->wrIdx     = slotIdx;
+    cqSlot_t* slot = (cqSlot_t*)(cq->slots +  slotIdx * cq->slotSize);
+    if(slot->__state != cqSTINUSEWR){
+        return cqEWRONGSLOT;
+    }
+    slot->len     = cq->slotDataSize;
+    //Set this to the current index, since it's now free, it's guaranteed to be writable in the future.
+    cq->wrIdx     = slotIdx;
 
-        __asm__ __volatile__ ("mfence");
-        slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
-        return cqENOERR;
+    __asm__ __volatile__ ("mfence");
+    slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
+    return cqENOERR;
 }
 
 
 cqError_t cQPushNext(cq_t* cq, i8* data, i64* len_io)
 {
+    if(cq == NULL || data == NULL || len_io == NULL){
+        return cqNULLPARAM;
+    }
+
+
     cqSlot_t* slot = NULL;
     i64 idx = -1;
     cqError_t err = cqGetNextWr(cq, &slot, &idx);
@@ -138,42 +177,55 @@ cqError_t cQPushNext(cq_t* cq, i8* data, i64* len_io)
 
 cqError_t cqGetNextRd(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o)
 {
-    const i64 slotCount = cq->slotCount;
-
-    for(i64 i = 0; i < slotCount; i++){
-        const i64 idx = cq->rdIdx + i < slotCount ? cq->rdIdx + i : cq->rdIdx + i - slotCount;
-        cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
-        if(slot->__state == cqSTREADY){
-            slot->__state = cqSTINUSERD;
-            cq->rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-            *slotIdx_o = idx;
-            *slot_o = slot;
-            return cqENOERR;
-        }
+    if(cq == NULL || slot_o == NULL || slotIdx_o == NULL){
+        return cqNULLPARAM;
     }
 
-    return cqENOSLOT;
+
+    const i64 slotCount = cq->slotCount;
+
+    const i64 idx = cq->rdIdx + 1 < slotCount ? cq->rdIdx + 1 : cq->rdIdx + 1 - slotCount;
+    cqSlot_t* slot = (cqSlot_t*)(cq->slots +  idx * cq->slotSize);
+    if(slot->__state != cqSTREADY){
+        return cqENOSLOT;
+    }
+
+    slot->__state = cqSTINUSERD;
+    cq->rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
+    *slotIdx_o = idx;
+    *slot_o = slot;
+    return cqENOERR;
+
 }
 
 cqError_t cqReleaseSlotRd(cq_t* cq, i64 slotIdx)
 {
+    if(cq == NULL){
+        return cqNULLPARAM;
+    }
+
     if(slotIdx < 0 || slotIdx > cq->slotCount){
-            return cqERANGE;
-        }
+        return cqERANGE;
+    }
 
-        cqSlot_t* slot = (cqSlot_t*)(cq->slots +  slotIdx * cq->slotSize);
-        if(slot->__state != cqSTINUSERD){
-            return cqEWRONGSLOT;
-        }
-        slot->len     = cq->slotDataSize;
+    cqSlot_t* slot = (cqSlot_t*)(cq->slots +  slotIdx * cq->slotSize);
+    if(slot->__state != cqSTINUSERD){
+        return cqEWRONGSLOT;
+    }
+    slot->len     = cq->slotDataSize;
 
-        __asm__ __volatile__ ("mfence");
-        slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
-        return cqENOERR;
+    __asm__ __volatile__ ("mfence");
+    slot->__state = cqSTFREE; //This must happen last! At this point, it is committed!
+    return cqENOERR;
 }
 
 cqError_t cqPullNext(cq_t* cq, i8* data, i64* len_io)
 {
+    if(cq == NULL || data == NULL || len_io == NULL){
+        return cqNULLPARAM;
+    }
+
+
     cqSlot_t* slot = NULL;
     i64 idx = -1;
     cqError_t err = cqGetNextRd(cq, &slot, &idx);
@@ -218,6 +270,7 @@ char* errors[cqECOUNT] = {
     "Value is out of range",
     "Wrong slot selected",
     "PANIC! INTERNAL MEMROY OVERWRITTEN",
+    "Null paramter supplied"
 
 };
 

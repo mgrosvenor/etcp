@@ -56,6 +56,7 @@ typedef enum {
     cqERANGE,       //!< cqERANGE       Out of range!
     cqEWRONGSLOT,   //!< cqEWRONGSLOT   This slot is not in the sate we expected
     cqEPANIC,       //!< cqEPANIC       Something bad has happened, user has taken too much memory!
+    cqNULLPARAM,    //!< cqNULLPARAM    A parameter supplied was null and it shouldn't be!
     cqECOUNT,       //!< cqERCOUNT      Total number of error codes.
 } cqError_t;
 
@@ -79,6 +80,14 @@ cq_t* cqNew(i64 buffSize, i64 slotCount);
  */
 cqError_t cqGetNextWr(cq_t* cq, cqSlot_t** slot_o, i64* slotIdx_o);
 
+/**
+ * @brief           Try to get a writing slot at a specific index. This breaks the circular nature of the ring..
+ * @param cq        The CQ structure that we're operating on
+ * @param slot_o    If successful, slot_o variable will point to a valid CQ slot.
+ * @param slotIdx   The index to try
+ * @return
+ */
+cqError_t cqGetNextWrIdx(cq_t* cq, cqSlot_t** slot_o, i64 slotIdx);
 
 /**
  * @brief           Tell the CQ that the slot is ready to be read. After this, no more changes can be made
