@@ -32,7 +32,7 @@ typedef struct __attribute__((packed)){
 } sackField_t;
 
 
-#define UNCO_MAX_SACK 9 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
+#define UNCO_MAX_SACK 13 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
 typedef struct __attribute__((packed)){
     i64 sackBase;
     i64 sackCount;
@@ -49,32 +49,38 @@ typedef struct __attribute__((packed)){
 //Assumes a fast layer 2 network (10G plus), with reasonable latency. In this case, sending many more bits, is better than
 //sending many more packets at higher latency
 typedef struct __attribute__((packed)){
-    i64 typeFlags;  //64 different message type flags, allows a message to be a CON, DAT, FIN and ACK all in 1.
-    i64 src;        //Port, ip address, whatever
-    i64 dst;        //Port, ip address, whatever
-    i64 timeNs;     //Unix time in ns, used for RTT estimation
-    sack_t sacks;   //All of the selective acknowledgements
-    dat_t data;     //This MUST come last,data follows
+    i64 ver       :8;   //Protocol version
+    i64 typeFlags :56;  //56 different message type flags, allows a message to be a CON, DAT, FIN and ACK all in 1.
+    i32 srcPort;        //Port on the TX side
+    i32 dstPort;        //Port on the RX side
+    i64 timeNs;         //Unix time in ns, used for RTT estimation
+    sack_t sacks;       //All of the selective acknowledgements
+    dat_t data;         //This MUST come last,data follows
 } uncoMsgHead_t;
 
 _Static_assert(sizeof(uncoMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 20B of ethernet header + VLAN");
 
-typedef struct uncoConn uncoConn_t;
+typedef struct {
+    i32 srcPort;
+    i32 dstPort;
+    i64 srcAddr;
+    i64 dstAddr;
+} uncoFlowId_t;
 
+
+typedef struct uncoConn uncoConn_t;
 struct uncoConn {
     bool connected;
-    i64 src;    //Identifiers for this flow
-    i64 dst;    //Identifiers for this flow
+
     uncoConn_t* next; //For chaining in the hashtable
 
     cq_t* rxcq; //Queue for incoming packets
     cq_t* txcq; //Queue for outgoing packets
 
     i64 seqAck; //The current acknowledge sequence number
-
-
-
+    uncoFlowId_t flowId;
 };
+
 
 
 #define MAXCONNSPOW 10ULL //(2^10 = 1024 buckets)
@@ -111,7 +117,21 @@ void uncoConnDelete(uncoConn_t* uc)
 }
 
 
-uncoConn_t* uncoConnNew(i64 windowSize, i64 buffSize, i64 src, i64 dst )
+int cmpFlowId(const uncoFlowId_t* __restrict lhs, const uncoFlowId_t* __restrict rhs)
+{
+    return lhs->dstAddr < rhs->dstAddr ? -1 :
+           lhs->dstAddr > rhs->dstAddr ?  1 :
+           lhs->srcAddr < rhs->srcAddr ? -1 :
+           lhs->srcAddr > rhs->srcAddr ?  1 :
+           lhs->dstPort < rhs->dstPort ? -1 :
+           lhs->dstPort > rhs->dstPort ?  1 :
+           lhs->srcPort < rhs->srcPort ? -1 :
+           lhs->srcPort > rhs->srcPort ?  1 :
+           0;
+}
+
+
+uncoConn_t* uncoConnNew(const i64 windowSize, const i64 buffSize, const uncoFlowId_t* flowId )
 {
     uncoConn_t* conn = calloc(1, sizeof(uncoConn_t));
     if(!conn){ return NULL; }
@@ -128,62 +148,61 @@ uncoConn_t* uncoConnNew(i64 windowSize, i64 buffSize, i64 src, i64 dst )
         return NULL;
     }
 
-    conn->src = src;
-    conn->dst = dst;
+    conn->flowId = *flowId;
 
     return conn;
 }
 
 
-static inline i64 getHashKey(const uncoMsgHead_t* msg)
+static inline i64 getIdx(const uncoFlowId_t* const flowId)
 {
-    i64 hash64 = spooky_Hash64(&msg->src,sizeof(msg->src) * 2, 0xB16B00B1E5FULL);
+    i64 hash64 = spooky_Hash64(flowId, sizeof(uncoFlowId_t), 0xB16B00B1E5FULL);
     return (hash64 * 11400714819323198549ul) >> (64 - MAXCONNSPOW);
 }
 
 
-ucError_t uncoOnConnAdd(const uncoMsgHead_t* msg, i64 windowSegs, i64 segSize)
+ucError_t uncoOnConnAdd( i64 windowSegs, i64 segSize, const uncoFlowId_t* const newFlowId)
 {
-    const i64 idx = getHashKey(msg);
+    const i64 idx = getIdx(newFlowId);
     uncoConn_t* conn = uncoState.conns[idx];
     if(conn){
-        if(conn->src == msg->src && conn->dst == msg->dst){
+        if(cmpFlowId(&conn->flowId, newFlowId) == 0){
             return ucEALREADY;
         }
 
         //Something already in the hash table, traverse to the end
         for(; conn->next; conn = conn->next){
-            if(conn->src == msg->src && conn->dst == msg->dst){
+            if(cmpFlowId(&conn->flowId, newFlowId) == 0){
                 return ucEALREADY;
             }
         }
 
-        conn->next = uncoConnNew(windowSegs, segSize, msg->src, msg->dst);
+        conn->next = uncoConnNew(windowSegs, segSize, newFlowId);
     }
     else{
-        conn = uncoConnNew(windowSegs, segSize, msg->src, msg->dst);
-        uncoState.conns[idx] = conn;
+        uncoState.conns[idx] = uncoConnNew(windowSegs, segSize, newFlowId);
     }
 
     return ucENOERR;
 }
 
 
-uncoConn_t* uncoOnConnGet(const uncoMsgHead_t* msg)
+uncoConn_t* uncoOnConnGet(const uncoFlowId_t* const getFlowId)
 {
-    const i64 idx = getHashKey(msg);
+    const i64 idx = getIdx(getFlowId);
     uncoConn_t* conn = uncoState.conns[idx];
     if(!conn){
         return NULL;
     }
 
-    if(conn->src == msg->src && conn->dst == msg->dst){
-        return conn;
+
+    if(cmpFlowId(&conn->flowId, getFlowId) == 0){
+               return conn;
     }
 
     //Something already in the hash table, traverse to the end
-    for(; conn->next; conn = conn->next){}{
-        if(conn->src == msg->src && conn->dst == msg->dst){
+    for(; conn->next; conn = conn->next){
+        if(cmpFlowId(&conn->flowId, getFlowId) == 0){
             return conn;
         }
     }
@@ -192,15 +211,15 @@ uncoConn_t* uncoOnConnGet(const uncoMsgHead_t* msg)
 }
 
 
-void uncoOnConnDel(uncoMsgHead_t* msg)
+void uncoOnConnDel(const uncoFlowId_t* const delFlowId)
 {
-    const i64 idx = getHashKey(msg);
+    const i64 idx = getHashKey(delFlowId);
     uncoConn_t* conn = uncoState.conns[idx];
     if(!conn){
         return;
     }
 
-    if(conn->src == msg->src && conn->dst == msg->dst){
+    if(cmpFlowId(&conn->flowId, delFlowId) == 0){
         uncoState.conns[idx] = conn->next;
         uncoConnDelete(conn);
     }
@@ -208,7 +227,7 @@ void uncoOnConnDel(uncoMsgHead_t* msg)
     //Something already in the hash table, traverse to the end
     uncoConn_t* prev = conn;
     for(; conn->next; conn = conn->next){}{
-        if(conn->src == msg->src && conn->dst == msg->dst){
+        if(cmpFlowId(&conn->flowId, delFlowId) == 0){
             prev->next = conn->next;
             uncoConnDelete(conn);
         }
@@ -219,9 +238,9 @@ void uncoOnConnDel(uncoMsgHead_t* msg)
 
 #define MAXSEGS 1024
 #define MAXSEGSIZE (2048 - sizeof(uncoConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
-ucError_t uncoOnConn(const uncoMsgHead_t* msg)
+ucError_t uncoOnConn(const uncoFlowId_t* const flowId )
 {
-    ucError_t err = uncoOnConnAdd(msg,MAXSEGS, MAXSEGSIZE);
+    ucError_t err = uncoOnConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
     if(err != ucENOERR){
         printf("Error adding connection, ignoring\n");
         return err;
@@ -231,10 +250,10 @@ ucError_t uncoOnConn(const uncoMsgHead_t* msg)
 }
 
 
-ucError_t uncoOnDat(const uncoMsgHead_t* msg)
+ucError_t uncoOnDat(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
 {
     DBG("Working on new data message\n");
-    uncoConn_t* conn = uncoOnConnGet(msg);
+    uncoConn_t* conn = uncoOnConnGet(flowId);
     if(!conn){
         printf("Error data packet for invalid connection\n");
         return ucNOTCONN;
@@ -282,16 +301,17 @@ ucError_t uncoOnDat(const uncoMsgHead_t* msg)
     return ucENOERR;
 }
 
-ucError_t uncoOnDat(const uncoMsgHead_t* msg)
+ucError_t uncoOnAck(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
 {
     DBG("Working on new data message\n");
-    uncoConn_t* conn = uncoOnConnGet(msg);
-    if(!conn){
+    uncoConn_t* conn = uncoOnConnGet(flowId);
+    if(!conn){}
+}
 
 
 
 
-ucError_t uncoOnPacket( const void* const packet, const i64 len)
+ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i64 dstAddr)
 {
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(uncoMsgHead_t);
@@ -307,18 +327,26 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len)
         return ucBADPKT; //Bad packet, not enough data in it
     }
 
+    uncoFlowId_t flowId = {
+        .srcPort = srcAddr,
+        .dst_addr = dstAddr,
+        .srcPort = msg->srcPort,
+        .dstPort = msg->dstPort,
+    };
+
+
     //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
     //in one.
     if(msg->typeFlags & UNCO_CON){
-        uncoOnConn(msg);
+        uncoOnConn(msg, &flowId);
     }
 
     if(msg->typeFlags & UNCO_ACK){
-        uncoOnAck(msg);
+        uncoOnAck(msg, &flowId);
     }
 
     if(msg->typeFlags & UNCO_DAT){
-        uncoOnDat(msg);
+        uncoOnDat(msg, &flowId);
     }
 
     if(msg->typeFlags & UNCO_FIN){
