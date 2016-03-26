@@ -27,45 +27,72 @@ enum {
 
 
 typedef struct __attribute__((packed)){
-    uint16_t start; //At most 65K segments per window
-    uint16_t stop;
+    uint16_t offset; //Offset from the base seq number
+    uint16_t count;  //Total number of
 } sackField_t;
 
 
-#define UNCO_MAX_SACK 13 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
+#define UNCO_MAX_SACK 8 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
 typedef struct __attribute__((packed)){
-    i64 sackBase;
-    i64 sackCount;
-    i64 rxWindow;
+    i64 sackBaseSeq;
+    uint16_t sackCount    : 3;  //Max 8 sack fields
+    uint16_t reserved     : 13; //Not in use right now
+    uint16_t rxWindowSegs : 16; //Max 65K  segment buffers
     sackField_t sacks[UNCO_MAX_SACK];
-} sack_t;
+} uncoMsgSack_t;
 
 typedef struct __attribute__((packed)){
-    i64 seqNum;
-    i64 datLen;
-} dat_t;
+    uint64_t seqNum;
+    uint32_t datLen; //Max 4G per message
+} uncoMsgDat_t;
+
+typedef struct __attribute__((packed)){
+    //Note 1: Client and server times cannot be compared unless there is some kind of time synchronisation (eg PTP)
+    //Note 2: Hardware cycle counts and software times cannot be compared unless there is time synchronisation
+    //Note 3: To save space, most times are 32bits only, which assumes that time differences will be <4 seconds.
+    //Note 4: Assumption 3 can be checked using swRxDatTimeNs - swTxDatTimeNs which is the absolute unix time.
+    i64 swTxDatTimeNs;   //Client Unix time in ns, used for RTT time estimation
+    i32 hwTxDatTimeCyc;  //Client hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i32 hwRxDatTimeCyc;  //Server hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i32 swRxDatTimeNs;   //Server Unix time in ns, used for host processing estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i32 swTxAckTimeNs;   //Server Unix time in ns, used for host processing estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i32 hwTxAckTimeCyc;  //Server hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i32 hwRxAckTimeCyc;  //Client hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
+    i64 swRxAckTimeNs;   //Client Unix time in ns, used for RTT time estimation
+} uncoMsgTime_t;
 
 
 //Assumes a fast layer 2 network (10G plus), with reasonable latency. In this case, sending many more bits, is better than
 //sending many more packets at higher latency
 typedef struct __attribute__((packed)){
-    i64 ver       :8;   //Protocol version
-    i64 typeFlags :56;  //56 different message type flags, allows a message to be a CON, DAT, FIN and ACK all in 1.
+    i32 ver       :6;   //Protocol version MAX 64 versions
+    i32 typeFlags :26;  //26 different message type flags, allows a message to be a CON, DAT, FIN and ACK all in 1.
     i32 srcPort;        //Port on the TX side
     i32 dstPort;        //Port on the RX side
-    i64 timeNs;         //Unix time in ns, used for RTT estimation
-    sack_t sacks;       //All of the selective acknowledgements
-    dat_t data;         //This MUST come last,data follows
+
+    uncoMsgTime_t timing; //Timing info for estimation
+    uncoMsgSack_t acks;   //All of the selective acknowledgements
+    uncoMsgDat_t  data;   //This MUST come last,data follows
 } uncoMsgHead_t;
 
-_Static_assert(sizeof(uncoMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 20B of ethernet header + VLAN");
+//NB: The minimum UnCo packet is thus 128B when using ethernet
+_Static_assert(sizeof(uncoMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 16-18B of ethernet header + VLAN + FCS");
 
-typedef struct {
+
+typedef struct  __attribute__((packed)) {
     i32 srcPort;
     i32 dstPort;
     i64 srcAddr;
     i64 dstAddr;
+} uncoFlowIdConnect_t;
+
+typedef struct  __attribute__((packed)){
+    i32 dstPort;
+    i32 srcPort;
+    i64 dstAddr;
+    i64 srcAddr;
 } uncoFlowId_t;
+
 
 
 typedef struct uncoConn uncoConn_t;
@@ -119,19 +146,11 @@ void uncoConnDelete(uncoConn_t* uc)
 
 int cmpFlowId(const uncoFlowId_t* __restrict lhs, const uncoFlowId_t* __restrict rhs)
 {
-    return lhs->dstAddr < rhs->dstAddr ? -1 :
-           lhs->dstAddr > rhs->dstAddr ?  1 :
-           lhs->srcAddr < rhs->srcAddr ? -1 :
-           lhs->srcAddr > rhs->srcAddr ?  1 :
-           lhs->dstPort < rhs->dstPort ? -1 :
-           lhs->dstPort > rhs->dstPort ?  1 :
-           lhs->srcPort < rhs->srcPort ? -1 :
-           lhs->srcPort > rhs->srcPort ?  1 :
-           0;
+    return memcmp(lhs,rhs, sizeof(uncoFlowId_t));
 }
 
 
-uncoConn_t* uncoConnNew(const i64 windowSize, const i64 buffSize, const uncoFlowId_t* flowId )
+uncoConn_t* uncoConnNew(const i64 windowSize, const i64 buffSize, const uncoFlowId_t* flowId)
 {
     uncoConn_t* conn = calloc(1, sizeof(uncoConn_t));
     if(!conn){ return NULL; }
@@ -213,7 +232,7 @@ uncoConn_t* uncoOnConnGet(const uncoFlowId_t* const getFlowId)
 
 void uncoOnConnDel(const uncoFlowId_t* const delFlowId)
 {
-    const i64 idx = getHashKey(delFlowId);
+    const i64 idx = getIdx(delFlowId);
     uncoConn_t* conn = uncoState.conns[idx];
     if(!conn){
         return;
@@ -301,11 +320,62 @@ ucError_t uncoOnDat(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
     return ucENOERR;
 }
 
+
+ucError_t uncoDoAck(cq_t* const cq, const uint64_t seq, const uncoMsgTime_t* const time)
+{
+    const uint64_t idx = seq % cq->slotCount;
+    DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
+    cqSlot_t* slot = NULL;
+    cqError_t err = cqGetSlotIdx(cq,&slot,idx);
+    if(err == cqEWRONGSLOT){
+        WARN("Got an ACK for a packet that's gone.\n");
+        return ucENOERR;
+    }
+    else if(err != cqENOERR){
+        WARN("Error getting value from Circular Queue: %s", cqError2Str(err));
+        return ucECQERR;
+    }
+
+    uncoMsgHead_t* msg = slot->buff;
+    if(seq != msg->data.seqNum){
+        WARN("Got an ACK for a packet that's gone.\n");
+        return ucENOERR;
+    }
+    //Successful ack! -- Do timing stats here
+    DBG("Successful ack for seq %li at index=%li\n", seq, idx);
+    //TODO XXX can do stats here.
+    (void)time;
+
+    //Packet is now ack'd, we can release this slot and use it for another TX
+    cqReleaseSlotRd(cq,idx);
+    return ucENOERR;
+}
+
+
+
 ucError_t uncoOnAck(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
 {
     DBG("Working on new data message\n");
     uncoConn_t* conn = uncoOnConnGet(flowId);
-    if(!conn){}
+    if(!conn){
+        WARN("Trying to ACK a packet on a flow that doesn't exist?\n");
+        return ucNOTCONN; //Trying to ACK a packet on a flow that doesn't exist
+    }
+
+    const uint64_t sackBaseSeq = msg->acks.sackBaseSeq;
+    //Process the acks
+    for(i64 sackIdx = 0; sackIdx < msg->acks.sackCount; sackIdx++){
+        const uint16_t ackOffset = msg->acks.sacks[sackIdx].offset;
+        const uint16_t ackCount = msg->acks.sacks[sackIdx].count;
+        DBG("Working on ACKs between %li and %li\n", sackBaseSeq + ackOffset, sackBaseSeq + ackOffset + ackCount);
+        for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
+            const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
+            uncoDoAck(conn->txcq,ackSeq,&msg->timing);
+        }
+    }
+
+    return ucENOERR;
+
 }
 
 
@@ -328,17 +398,16 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i6
     }
 
     uncoFlowId_t flowId = {
-        .srcPort = srcAddr,
-        .dst_addr = dstAddr,
+        .srcAddr = srcAddr,
+        .dstAddr = dstAddr,
         .srcPort = msg->srcPort,
         .dstPort = msg->dstPort,
     };
 
-
     //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
     //in one.
     if(msg->typeFlags & UNCO_CON){
-        uncoOnConn(msg, &flowId);
+        uncoOnConn(&flowId);
     }
 
     if(msg->typeFlags & UNCO_ACK){
@@ -350,7 +419,8 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i6
     }
 
     if(msg->typeFlags & UNCO_FIN){
-
+        //Do cleanup here. This is a bit of pain because we need to wait for any outstanding DAT packets to come in before we release resources
+        WARN("FIN is not implemented\n");
     }
 
     return ucENOERR;

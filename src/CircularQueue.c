@@ -74,7 +74,7 @@ cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotId
     return cqENOERR;
 }
 
-cqError_t cqGetNextWrIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
+cqError_t cqGetWrIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
 {
 
     if(cq == NULL || slot_o == NULL){
@@ -294,6 +294,32 @@ cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io)
     return cqENOERR;
 
 }
+
+//Get a non empty slot
+cqError_t cqGetSlotIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
+{
+
+    if(cq == NULL || slot_o == NULL){
+        return cqNULLPARAM;
+    }
+
+    const i64 idx       = slotIdx;
+    const i64 slotCount = cq->slotCount;
+
+    if(idx > slotCount || idx < 0){
+        return cqERANGE;
+    }
+
+    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
+    if(slot->__state == cqSTFREE){
+        return cqEWRONGSLOT;
+    }
+
+    *slot_o = slot;
+    return cqENOERR;
+}
+
+
 
 void cqDelete(cq_t* const cq)
 {

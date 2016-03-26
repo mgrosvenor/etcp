@@ -30,8 +30,8 @@ typedef struct __attribute__((packed)){
     };
 
 
-    i64 len;   //Length of buffer
-    i8* buff;  //Place to get/put data
+    i64 len;     //Length of buffer
+    void* buff;  //Place to get/put data
 } cqSlot_t;
 
 
@@ -159,7 +159,14 @@ cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx);
  */
 cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io);
 
-
+/**
+ * @brief       Get a slot at the given index
+ * @param cq
+ * @param slot_o
+ * @param slotIdx
+ * @return
+ */
+cqError_t cqGetSlotIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx);
 
 /**
  * Free memory resoruces associated with this CQ
