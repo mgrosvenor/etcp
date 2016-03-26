@@ -167,7 +167,7 @@ cqError_t cqPushIdx(cq_t* const cq, const void* __restrict data, i64* const len_
 
 
     cqSlot_t* slot = NULL;
-    cqError_t err = cqGetNextWrIdx(cq, &slot, idx);
+    cqError_t err = cqGetWrIdx(cq, &slot, idx);
     if(err != cqENOERR){
         return err;
     }

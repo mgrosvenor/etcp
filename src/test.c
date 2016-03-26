@@ -39,12 +39,12 @@ typedef struct __attribute__((packed)){
     uint16_t reserved     : 13; //Not in use right now
     uint16_t rxWindowSegs : 16; //Max 65K  segment buffers
     sackField_t sacks[UNCO_MAX_SACK];
-} uncoMsgSack_t;
+} etcpMsgSack_t;
 
 typedef struct __attribute__((packed)){
     uint64_t seqNum;
     uint32_t datLen; //Max 4G per message
-} uncoMsgDat_t;
+} etcpMsgDat_t;
 
 typedef struct __attribute__((packed)){
     //Note 1: Client and server times cannot be compared unless there is some kind of time synchronisation (eg PTP)
@@ -59,7 +59,7 @@ typedef struct __attribute__((packed)){
     i32 hwTxAckTimeCyc;  //Server hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
     i32 hwRxAckTimeCyc;  //Client hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
     i64 swRxAckTimeNs;   //Client Unix time in ns, used for RTT time estimation
-} uncoMsgTime_t;
+} etcpMsgTime_t;
 
 
 //Assumes a fast layer 2 network (10G plus), with reasonable latency. In this case, sending many more bits, is better than
@@ -70,13 +70,13 @@ typedef struct __attribute__((packed)){
     i32 srcPort;        //Port on the TX side
     i32 dstPort;        //Port on the RX side
 
-    uncoMsgTime_t timing; //Timing info for estimation
-    uncoMsgSack_t acks;   //All of the selective acknowledgements
-    uncoMsgDat_t  data;   //This MUST come last,data follows
-} uncoMsgHead_t;
+    etcpMsgTime_t timing; //Timing info for estimation
+    etcpMsgSack_t acks;   //All of the selective acknowledgements
+    etcpMsgDat_t  data;   //This MUST come last,data follows
+} etcpMsgHead_t;
 
 //NB: The minimum UnCo packet is thus 128B when using ethernet
-_Static_assert(sizeof(uncoMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 16-18B of ethernet header + VLAN + FCS");
+_Static_assert(sizeof(etcpMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 16-18B of ethernet header + VLAN + FCS");
 
 
 typedef struct  __attribute__((packed)) {
@@ -84,28 +84,28 @@ typedef struct  __attribute__((packed)) {
     i32 dstPort;
     i64 srcAddr;
     i64 dstAddr;
-} uncoFlowIdConnect_t;
+} etcpFlowIdConnect_t;
 
 typedef struct  __attribute__((packed)){
     i32 dstPort;
     i32 srcPort;
     i64 dstAddr;
     i64 srcAddr;
-} uncoFlowId_t;
+} etcpFlowId_t;
 
 
 
-typedef struct uncoConn uncoConn_t;
-struct uncoConn {
+typedef struct etcpConn etcpConn_t;
+struct etcpConn {
     bool connected;
 
-    uncoConn_t* next; //For chaining in the hashtable
+    etcpConn_t* next; //For chaining in the hashtable
 
     cq_t* rxcq; //Queue for incoming packets
     cq_t* txcq; //Queue for outgoing packets
 
     i64 seqAck; //The current acknowledge sequence number
-    uncoFlowId_t flowId;
+    etcpFlowId_t flowId;
 };
 
 
@@ -113,26 +113,26 @@ struct uncoConn {
 #define MAXCONNSPOW 10ULL //(2^10 = 1024 buckets)
 #define MAXCONNS (1 << MAXCONNSPOW)
 typedef struct {
-    uncoConn_t* conns[MAXCONNS];
-} uncoState_t;
+    etcpConn_t* conns[MAXCONNS];
+} etcpState_t;
 
-uncoState_t uncoState = {0};
+etcpState_t etcpState = {0};
 
 
 typedef enum {
-    ucENOERR,       //Success!
-    ucENOMEM,       //Ran out of memory
-    ucBADPKT,       //Bad packet, not enough bytes for a header
-    ucEALREADY,     //Already connected!
-    ucETOOMANY,     //Too many connections, we've run out!
-    ucNOTCONN,      //Not connected to anything
-    ucECQERR,       //Some issue with a Circular Queue
-    ucERANGE,       //Out of range
-    ucETOOBIG,      //The payload is too big for this buffer
-} ucError_t;
+    etcpENOERR,       //Success!
+    etcpENOMEM,       //Ran out of memory
+    etcpEBADPKT,      //Bad packet, not enough bytes for a header
+    etcpEALREADY,     //Already connected!
+    etcpETOOMANY,     //Too many connections, we've run out!
+    etcpENOTCONN,     //Not connected to anything
+    etcpECQERR,       //Some issue with a Circular Queue
+    etcpERANGE,       //Out of range
+    etcpETOOBIG,      //The payload is too big for this buffer
+} etcpError_t;
 
 
-void uncoConnDelete(uncoConn_t* uc)
+void etcpConnDelete(etcpConn_t* uc)
 {
     if(!uc){ return; }
 
@@ -144,26 +144,26 @@ void uncoConnDelete(uncoConn_t* uc)
 }
 
 
-int cmpFlowId(const uncoFlowId_t* __restrict lhs, const uncoFlowId_t* __restrict rhs)
+int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId_t* __restrict rhs)
 {
-    return memcmp(lhs,rhs, sizeof(uncoFlowId_t));
+    return memcmp(lhs,rhs, sizeof(etcpFlowId_t));
 }
 
 
-uncoConn_t* uncoConnNew(const i64 windowSize, const i64 buffSize, const uncoFlowId_t* flowId)
+etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize, const etcpFlowId_t* flowId)
 {
-    uncoConn_t* conn = calloc(1, sizeof(uncoConn_t));
+    etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     if(!conn){ return NULL; }
 
     conn->rxcq = cqNew(buffSize,windowSize);
     if(!conn->rxcq){
-        uncoConnDelete(conn);
+        etcpConnDelete(conn);
         return NULL;
     }
 
     conn->txcq = cqNew(buffSize,windowSize);
     if(!conn->txcq){
-        uncoConnDelete(conn);
+        etcpConnDelete(conn);
         return NULL;
     }
 
@@ -173,43 +173,43 @@ uncoConn_t* uncoConnNew(const i64 windowSize, const i64 buffSize, const uncoFlow
 }
 
 
-static inline i64 getIdx(const uncoFlowId_t* const flowId)
+static inline i64 getIdx(const etcpFlowId_t* const flowId)
 {
-    i64 hash64 = spooky_Hash64(flowId, sizeof(uncoFlowId_t), 0xB16B00B1E5FULL);
+    i64 hash64 = spooky_Hash64(flowId, sizeof(etcpFlowId_t), 0xB16B00B1E5FULL);
     return (hash64 * 11400714819323198549ul) >> (64 - MAXCONNSPOW);
 }
 
 
-ucError_t uncoOnConnAdd( i64 windowSegs, i64 segSize, const uncoFlowId_t* const newFlowId)
+etcpError_t etcpOnConnAdd( i64 windowSegs, i64 segSize, const etcpFlowId_t* const newFlowId)
 {
     const i64 idx = getIdx(newFlowId);
-    uncoConn_t* conn = uncoState.conns[idx];
+    etcpConn_t* conn = etcpState.conns[idx];
     if(conn){
         if(cmpFlowId(&conn->flowId, newFlowId) == 0){
-            return ucEALREADY;
+            return etcpEALREADY;
         }
 
         //Something already in the hash table, traverse to the end
         for(; conn->next; conn = conn->next){
             if(cmpFlowId(&conn->flowId, newFlowId) == 0){
-                return ucEALREADY;
+                return etcpEALREADY;
             }
         }
 
-        conn->next = uncoConnNew(windowSegs, segSize, newFlowId);
+        conn->next = etcpConnNew(windowSegs, segSize, newFlowId);
     }
     else{
-        uncoState.conns[idx] = uncoConnNew(windowSegs, segSize, newFlowId);
+        etcpState.conns[idx] = etcpConnNew(windowSegs, segSize, newFlowId);
     }
 
-    return ucENOERR;
+    return etcpENOERR;
 }
 
 
-uncoConn_t* uncoOnConnGet(const uncoFlowId_t* const getFlowId)
+etcpConn_t* etcpOnConnGet(const etcpFlowId_t* const getFlowId)
 {
     const i64 idx = getIdx(getFlowId);
-    uncoConn_t* conn = uncoState.conns[idx];
+    etcpConn_t* conn = etcpState.conns[idx];
     if(!conn){
         return NULL;
     }
@@ -230,25 +230,25 @@ uncoConn_t* uncoOnConnGet(const uncoFlowId_t* const getFlowId)
 }
 
 
-void uncoOnConnDel(const uncoFlowId_t* const delFlowId)
+void etcpOnConnDel(const etcpFlowId_t* const delFlowId)
 {
     const i64 idx = getIdx(delFlowId);
-    uncoConn_t* conn = uncoState.conns[idx];
+    etcpConn_t* conn = etcpState.conns[idx];
     if(!conn){
         return;
     }
 
     if(cmpFlowId(&conn->flowId, delFlowId) == 0){
-        uncoState.conns[idx] = conn->next;
-        uncoConnDelete(conn);
+        etcpState.conns[idx] = conn->next;
+        etcpConnDelete(conn);
     }
 
     //Something already in the hash table, traverse to the end
-    uncoConn_t* prev = conn;
+    etcpConn_t* prev = conn;
     for(; conn->next; conn = conn->next){}{
         if(cmpFlowId(&conn->flowId, delFlowId) == 0){
             prev->next = conn->next;
-            uncoConnDelete(conn);
+            etcpConnDelete(conn);
         }
         prev = conn;
     }
@@ -256,26 +256,26 @@ void uncoOnConnDel(const uncoFlowId_t* const delFlowId)
 }
 
 #define MAXSEGS 1024
-#define MAXSEGSIZE (2048 - sizeof(uncoConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
-ucError_t uncoOnConn(const uncoFlowId_t* const flowId )
+#define MAXSEGSIZE (2048 - sizeof(etcpConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
+etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
 {
-    ucError_t err = uncoOnConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
-    if(err != ucENOERR){
+    etcpError_t err = etcpOnConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
+    if(err != etcpENOERR){
         printf("Error adding connection, ignoring\n");
         return err;
     }
 
-    return ucENOERR;
+    return etcpENOERR;
 }
 
 
-ucError_t uncoOnDat(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
+etcpError_t etcpOnDat(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new data message\n");
-    uncoConn_t* conn = uncoOnConnGet(flowId);
+    etcpConn_t* conn = etcpOnConnGet(flowId);
     if(!conn){
         printf("Error data packet for invalid connection\n");
-        return ucNOTCONN;
+        return etcpENOTCONN;
     }
 
     const i64 rxQSlotCount  = conn->rxcq->slotCount;
@@ -296,15 +296,15 @@ ucError_t uncoOnDat(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
     //-- if seq >= seqMax, it is beyond the end of the rx window
     if(seqPkt < seqMin){
         WARN("Ignoring packet, seqPkt %li < %li seqMin, packet has already been ack'd\n", seqPkt, seqMin);
-        return ucERANGE;
+        return etcpERANGE;
     }
 
     if(seqPkt > seqMax){
         WARN("Ignoring packet, seqPkt %li > %li seqMax, packet will not fit in window\n", seqPkt, seqMax);
-        return ucERANGE;
+        return etcpERANGE;
     }
 
-    i64 toCopy = msg->data.datLen + sizeof(uncoMsgHead_t);
+    i64 toCopy = msg->data.datLen + sizeof(etcpMsgHead_t);
     i64 toCopyTmp = toCopy;
     cqError_t err = cqPushIdx(conn->rxcq,msg,&toCopyTmp,seqIdx);
     if(err != cqENOERR){
@@ -313,15 +313,15 @@ ucError_t uncoOnDat(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
         }
         else{
             WARN("Error inserting into Circular Queue: %s", cqError2Str(err));
-            return ucECQERR;
+            return etcpECQERR;
         }
     }
 
-    return ucENOERR;
+    return etcpENOERR;
 }
 
 
-ucError_t uncoDoAck(cq_t* const cq, const uint64_t seq, const uncoMsgTime_t* const time)
+etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpMsgTime_t* const time)
 {
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
@@ -329,17 +329,17 @@ ucError_t uncoDoAck(cq_t* const cq, const uint64_t seq, const uncoMsgTime_t* con
     cqError_t err = cqGetSlotIdx(cq,&slot,idx);
     if(err == cqEWRONGSLOT){
         WARN("Got an ACK for a packet that's gone.\n");
-        return ucENOERR;
+        return etcpENOERR;
     }
     else if(err != cqENOERR){
         WARN("Error getting value from Circular Queue: %s", cqError2Str(err));
-        return ucECQERR;
+        return etcpECQERR;
     }
 
-    uncoMsgHead_t* msg = slot->buff;
+    etcpMsgHead_t* msg = slot->buff;
     if(seq != msg->data.seqNum){
         WARN("Got an ACK for a packet that's gone.\n");
-        return ucENOERR;
+        return etcpENOERR;
     }
     //Successful ack! -- Do timing stats here
     DBG("Successful ack for seq %li at index=%li\n", seq, idx);
@@ -348,18 +348,18 @@ ucError_t uncoDoAck(cq_t* const cq, const uint64_t seq, const uncoMsgTime_t* con
 
     //Packet is now ack'd, we can release this slot and use it for another TX
     cqReleaseSlotRd(cq,idx);
-    return ucENOERR;
+    return etcpENOERR;
 }
 
 
 
-ucError_t uncoOnAck(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
+etcpError_t etcpOnAck(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new data message\n");
-    uncoConn_t* conn = uncoOnConnGet(flowId);
+    etcpConn_t* conn = etcpOnConnGet(flowId);
     if(!conn){
         WARN("Trying to ACK a packet on a flow that doesn't exist?\n");
-        return ucNOTCONN; //Trying to ACK a packet on a flow that doesn't exist
+        return etcpENOTCONN; //Trying to ACK a packet on a flow that doesn't exist
     }
 
     const uint64_t sackBaseSeq = msg->acks.sackBaseSeq;
@@ -370,34 +370,34 @@ ucError_t uncoOnAck(const uncoMsgHead_t* msg, const uncoFlowId_t* const flowId)
         DBG("Working on ACKs between %li and %li\n", sackBaseSeq + ackOffset, sackBaseSeq + ackOffset + ackCount);
         for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
             const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
-            uncoDoAck(conn->txcq,ackSeq,&msg->timing);
+            etcpDoAck(conn->txcq,ackSeq,&msg->timing);
         }
     }
 
-    return ucENOERR;
+    return etcpENOERR;
 
 }
 
 
 
 
-ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i64 dstAddr)
+etcpError_t etcpOnPacket( const void* const packet, const i64 len, i64 srcAddr, i64 dstAddr)
 {
     //First sanity check the packet
-    const i64 minSizeHdr = sizeof(uncoMsgHead_t);
+    const i64 minSizeHdr = sizeof(etcpMsgHead_t);
     if(len < minSizeHdr){
         WARN("Not enough bytes to parse header\n");
-        return ucBADPKT; //Bad packet, not enough data in it
+        return etcpEBADPKT; //Bad packet, not enough data in it
     }
-    const uncoMsgHead_t* msg = (uncoMsgHead_t*)packet;
+    const etcpMsgHead_t* msg = (etcpMsgHead_t*)packet;
 
     const i64 minSizeDat = minSizeHdr + msg->data.datLen;
     if(len < minSizeDat){
         WARN("Not enough bytes to parse data\n");
-        return ucBADPKT; //Bad packet, not enough data in it
+        return etcpEBADPKT; //Bad packet, not enough data in it
     }
 
-    uncoFlowId_t flowId = {
+    etcpFlowId_t flowId = {
         .srcAddr = srcAddr,
         .dstAddr = dstAddr,
         .srcPort = msg->srcPort,
@@ -407,15 +407,15 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i6
     //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
     //in one.
     if(msg->typeFlags & UNCO_CON){
-        uncoOnConn(&flowId);
+        etcpOnConn(&flowId);
     }
 
     if(msg->typeFlags & UNCO_ACK){
-        uncoOnAck(msg, &flowId);
+        etcpOnAck(msg, &flowId);
     }
 
     if(msg->typeFlags & UNCO_DAT){
-        uncoOnDat(msg, &flowId);
+        etcpOnDat(msg, &flowId);
     }
 
     if(msg->typeFlags & UNCO_FIN){
@@ -423,7 +423,7 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i6
         WARN("FIN is not implemented\n");
     }
 
-    return ucENOERR;
+    return etcpENOERR;
 }
 
 
@@ -434,44 +434,44 @@ ucError_t uncoOnPacket( const void* const packet, const i64 len, i64 srcAddr, i6
 //
 //}
 //
-//u64 unco_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
+//u64 etcp_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
 //{
 //
 //}
 //
 //
-//u64 unco_listen(int __fd, int __n)
+//u64 etcp_listen(int __fd, int __n)
 //{
 //
 //}
 //
-//u64 unco_accept(int __fd, __SOCKADDR_ARG __addr, socklen_t *__restrict __addr_len)
+//u64 etcp_accept(int __fd, __SOCKADDR_ARG __addr, socklen_t *__restrict __addr_len)
 //{
 //
 //}
 //
-//u64 unco_sendto(int __fd, const void *__buf, size_t __n, int __flags)
-//{
-//
-//}
-//
-//
-//
-//u64 unco_send(int __fd, const void *__buf, size_t __n, int __flags)
+//u64 etcp_sendto(int __fd, const void *__buf, size_t __n, int __flags)
 //{
 //
 //}
 //
 //
 //
-//u64 unco_recv(int __fd, void *__buf, size_t __n, int __flags)
+//u64 etcp_send(int __fd, const void *__buf, size_t __n, int __flags)
+//{
+//
+//}
+//
+//
+//
+//u64 etcp_recv(int __fd, void *__buf, size_t __n, int __flags)
 //{
 //
 //}
 
 
 
-void uncotpTestClient()
+void etcptpTestClient()
 {
     //Open the connection
 
@@ -483,7 +483,7 @@ void uncotpTestClient()
 
 }
 
-void uncotpTestServer()
+void etcptpTestServer()
 {
 
 }
