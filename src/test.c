@@ -44,20 +44,28 @@ typedef struct  __attribute__((packed)){
 
 typedef struct etcpConn etcpConn_t;
 struct etcpConn {
-    bool connected;
+    etcpFlowId_t flowId;
 
     etcpConn_t* next; //For chaining in the hashtable
 
     cq_t* rxcq; //Queue for incoming packets
     cq_t* txcq; //Queue for outgoing packets
+    i64 lastTx;
     cq_t* akcq; //Queue for outgoing acknowledgement packets
 
     i64 seqAck; //The current acknowledge sequence number
     i64 seqSnd; //The current send sequence number
-    etcpFlowId_t flowId;
 
+
+    i64 retransTimeOut; //How long to wait before attempting a retransmit
+
+
+    //XXX HACKS BELOW!
     int16_t vlan; //XXX HACK - this should be in some nice ethernet place, not here.
-    uint8_t priority; //XXX HACK - this should be in some nice ethernet place, not here.s
+    uint8_t priority; //XXX HACK - this should be in some nice ethernet place, not here
+
+    void* hwState;
+    int (*hwXMit)(void* const hwState, const void* const data, const int len);
 };
 
 
@@ -500,7 +508,7 @@ static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, cons
 
 }
 
-//Assumes ethernet packets, does in-place construction of a packet
+//Assumes ethernet packets, does in-place construction of a packet and puts it into the circular queue ready to send
 static inline etcpError_t etcpEthSend(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io)
 {
     const i64 toSendLen = *toSendLen_io;
@@ -575,6 +583,64 @@ static inline etcpError_t etcpEthSend(etcpConn_t* const conn, const void* const 
     *toSendLen_io = bytesSent;
     return etcpENOERR;
 
+}
+
+
+//Traverse the send queues and check what can be sent.
+//First look over the ack send queue, we send ACK packets as a priority. If the ackQueue is empty, then look over the send
+//queue and check if anything has timed out.
+etcpError_t doCqSend(etcpConn_t* const conn)
+{
+    //Sending the ack's is simple, just send and forget;
+    cqSlot_t* slot = NULL;
+    i64 slotIdx;
+    while(cqGetNextRd(conn->akcq,&slot,&slotIdx) != cqENOSLOT){
+        conn->hwXMit(conn->hwState,slot->buff, slot->len);
+        cqError_t err = cqReleaseSlotRd(conn->akcq,slotIdx);
+        unlikely(err != cqENOERR){
+            ERR("CQ had an error: %s\n", cqError2Str(err));
+            return etcpECQERR;
+        }
+    }
+
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_REALTIME,&ts);
+    const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
+
+    //Sending the TX packets is a little more complicated because they need to stay until we've received an ack.
+    const i64 slotCount = conn->txcq->slotCount;
+    for(i64 i = 0; i < slotCount; i++){
+
+        conn->lastTx = conn->lastTx + i <  slotCount ? conn->lastTx + i : conn->lastTx + i - slotCount;
+        const cqError_t err = cqGetSlotIdx(conn->akcq,&slot,conn->lastTx);
+        eqlikely(err == cqEWRONGSLOT){
+            //The slot is empty
+            continue;
+        }
+        else unlikely(err != cqENOERR){
+            ERR("Error getting slot: %s\n", cqError2Str(err));
+            return etcpECQERR;
+        }
+
+        //We've now got a valid slot with a packet in it, grab the timestamp to see if it needs sending.
+        const i64 skipEthHdrOffset          = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + sizeof(eth8021qTCI_t);
+        const i8* const slotBuff            = slot->buff;
+        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff + skipEthHdrOffset);
+        const etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head +1);
+        const i64 rtto                      = conn->retransTimeOut;
+        const i64 swTxTimeNs                = head->ts.swRxTimeNs;
+        const i64 txAttempts                = datHdr->txAttempts;
+        const i64 transTimeNs               = swTxTimeNs + rtto * txAttempts;
+
+        if(timeNowNs > transTimeNs){
+            if(conn->hwXMit(conn->hwState,slot->buff, slot->len) < 0){
+                return etcpETRYAGAIN;
+            }
+            //Do NOT release the slot here. The release will happen in the RX code when an ack comes through.
+        }
+    }
+
+    return etcpENOERR;;
 }
 
 
