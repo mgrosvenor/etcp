@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <pthread.h>
-#include <stdint.h>
-#include <sys/socket.h>
-#include <string.h>
 #include <stdbool.h>
+#include <string.h>
+#include <pthread.h>
+
+#include <time.h>
+
+#include <sys/socket.h>
+
 #include <linux/if_ether.h>
 
 #include "CircularQueue.h"
@@ -15,6 +18,10 @@
 
 #include "packets.h"
 
+
+#define likely(x)       if(__builtin_expect((x),1))
+#define unlikely(x)     if(__builtin_expect((x),0))
+#define eqlikely(x)     if(x)
 
 
 typedef struct  __attribute__((packed)) {
@@ -72,10 +79,10 @@ typedef enum {
 
 void etcpConnDelete(etcpConn_t* uc)
 {
-    if(!uc){ return; }
+    unlikely(!uc){ return; }
 
-    if(uc->txcq){ cqDelete(uc->txcq); }
-    if(uc->rxcq){ cqDelete(uc->rxcq); }
+    likely(uc->txcq != NULL){ cqDelete(uc->txcq); }
+    likely(uc->rxcq != NULL){ cqDelete(uc->rxcq); }
 
     free(uc);
 
@@ -84,6 +91,7 @@ void etcpConnDelete(etcpConn_t* uc)
 
 int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId_t* __restrict rhs)
 {
+    //THis is ok because flows are packed
     return memcmp(lhs,rhs, sizeof(etcpFlowId_t));
 }
 
@@ -91,16 +99,16 @@ int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId_t* __restrict
 etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize, const etcpFlowId_t* flowId)
 {
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
-    if(!conn){ return NULL; }
+    unlikely(!conn){ return NULL; }
 
     conn->rxcq = cqNew(buffSize,windowSize);
-    if(!conn->rxcq){
+    unlikely(conn->rxcq == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
 
     conn->txcq = cqNew(buffSize,windowSize);
-    if(!conn->txcq){
+    unlikely(conn->txcq == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
@@ -122,14 +130,14 @@ etcpError_t etcpOnConnAdd( i64 windowSegs, i64 segSize, const etcpFlowId_t* cons
 {
     const i64 idx = getIdx(newFlowId);
     etcpConn_t* conn = etcpState.conns[idx];
-    if(conn){
-        if(cmpFlowId(&conn->flowId, newFlowId) == 0){
+    eqlikely(conn != NULL){
+        unlikely(cmpFlowId(&conn->flowId, newFlowId) == 0){
             return etcpEALREADY;
         }
 
         //Something already in the hash table, traverse to the end
         for(; conn->next; conn = conn->next){
-            if(cmpFlowId(&conn->flowId, newFlowId) == 0){
+            unlikely(cmpFlowId(&conn->flowId, newFlowId) == 0){
                 return etcpEALREADY;
             }
         }
@@ -148,18 +156,17 @@ etcpConn_t* etcpOnConnGet(const etcpFlowId_t* const getFlowId)
 {
     const i64 idx = getIdx(getFlowId);
     etcpConn_t* conn = etcpState.conns[idx];
-    if(!conn){
+    unlikely(conn == NULL){
         return NULL;
     }
 
-
-    if(cmpFlowId(&conn->flowId, getFlowId) == 0){
+    eqlikely(cmpFlowId(&conn->flowId, getFlowId) == 0){
                return conn;
     }
 
     //Something already in the hash table, traverse to the end
     for(; conn->next; conn = conn->next){
-        if(cmpFlowId(&conn->flowId, getFlowId) == 0){
+        eqlikely(cmpFlowId(&conn->flowId, getFlowId) == 0){
             return conn;
         }
     }
@@ -172,11 +179,11 @@ void etcpOnConnDel(const etcpFlowId_t* const delFlowId)
 {
     const i64 idx = getIdx(delFlowId);
     etcpConn_t* conn = etcpState.conns[idx];
-    if(!conn){
+    unlikely(conn == NULL){
         return;
     }
 
-    if(cmpFlowId(&conn->flowId, delFlowId) == 0){
+    eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
         etcpState.conns[idx] = conn->next;
         etcpConnDelete(conn);
     }
@@ -184,7 +191,7 @@ void etcpOnConnDel(const etcpFlowId_t* const delFlowId)
     //Something already in the hash table, traverse to the end
     etcpConn_t* prev = conn;
     for(; conn->next; conn = conn->next){}{
-        if(cmpFlowId(&conn->flowId, delFlowId) == 0){
+        eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
             prev->next = conn->next;
             etcpConnDelete(conn);
         }
@@ -195,10 +202,10 @@ void etcpOnConnDel(const etcpFlowId_t* const delFlowId)
 
 #define MAXSEGS 1024
 #define MAXSEGSIZE (2048 - sizeof(etcpConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
-etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
+static inline etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
 {
     etcpError_t err = etcpOnConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
-    if(err != etcpENOERR){
+    unlikely(err != etcpENOERR){
         printf("Error adding connection, ignoring\n");
         return err;
     }
@@ -207,17 +214,35 @@ etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
 }
 
 
-etcpError_t etcpOnDat(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId)
+static inline etcpError_t etcpOnDat(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
-    DBG("Working on new data message\n");
+    DBG("Working on new data message with type = 0x%016x\n", head->type);
+
+    const i64 minSizeDatHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
+    unlikely(len < minSizeDatHdr){
+        WARN("Not enough bytes to parse data header, required %li but got %li\n", minSizeDatHdr, len);
+        return etcpEBADPKT; //Bad packet, not enough data in it
+    }
+    const etcpMsgDatHdr_t* const datHdr = (const etcpMsgDatHdr_t* const)(head + 1);
+    DBG("Working on new data message with seq = 0x%016x\n", datHdr->seqNum);
+
+    //Got a valid data header, more sanity checking
+    const uint64_t datLen = len - minSizeDatHdr;
+    unlikely(datLen != datHdr->datLen){
+        WARN("Data length has unexpected value. Expected %li, but got %li\n",datLen, datHdr->datLen);
+        return etcpEBADPKT;
+    }
+    DBG("Working on new data message with len = 0x%016x\n", datHdr->datLen);
+
+    //Find the connection for this packet
     etcpConn_t* conn = etcpOnConnGet(flowId);
-    if(!conn){
-        printf("Error data packet for invalid connection\n");
+    unlikely(!conn){
+        WARN("Error data packet for invalid connection\n");
         return etcpENOTCONN;
     }
 
     const i64 rxQSlotCount  = conn->rxcq->slotCount;
-    const i64 seqPkt        = msg->data.seqNum;
+    const i64 seqPkt        = datHdr->seqNum;
     const i64 seqMin        = conn->seqAck;
     const i64 seqMax        = conn->seqAck + rxQSlotCount;
     const i64 seqIdx        = seqPkt % rxQSlotCount;
@@ -232,21 +257,21 @@ etcpError_t etcpOnDat(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId
     //When we receive a packet, it must be between seqMin and seqMax
     //-- if seq < seqMin, it has already been ack'd
     //-- if seq >= seqMax, it is beyond the end of the rx window
-    if(seqPkt < seqMin){
+    unlikely(seqPkt < seqMin){
         WARN("Ignoring packet, seqPkt %li < %li seqMin, packet has already been ack'd\n", seqPkt, seqMin);
         return etcpERANGE;
     }
 
-    if(seqPkt > seqMax){
+    unlikely(seqPkt > seqMax){
         WARN("Ignoring packet, seqPkt %li > %li seqMax, packet will not fit in window\n", seqPkt, seqMax);
         return etcpERANGE;
     }
 
-    i64 toCopy = msg->data.datLen + sizeof(etcpMsgHead_t);
+    i64 toCopy    = len; //By now this value has been checked to be right
     i64 toCopyTmp = toCopy;
-    cqError_t err = cqPushIdx(conn->rxcq,msg,&toCopyTmp,seqIdx);
-    if(err != cqENOERR){
-        if(err == cqETRUNC){
+    cqError_t err = cqPushIdx(conn->rxcq,head,&toCopyTmp,seqIdx);
+    unlikely(err != cqENOERR){
+        eqlikely(err == cqETRUNC){
             WARN("Payload (%liB) is too big for slot (%liB), truncating\n", toCopy, toCopyTmp );
         }
         else{
@@ -259,30 +284,38 @@ etcpError_t etcpOnDat(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId
 }
 
 
-etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpMsgTime_t* const time)
+etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
 {
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
     cqSlot_t* slot = NULL;
     cqError_t err = cqGetSlotIdx(cq,&slot,idx);
-    if(err == cqEWRONGSLOT){
+    unlikely(err == cqEWRONGSLOT){
         WARN("Got an ACK for a packet that's gone.\n");
         return etcpENOERR;
     }
-    else if(err != cqENOERR){
+    else unlikely(err != cqENOERR){
         WARN("Error getting value from Circular Queue: %s", cqError2Str(err));
         return etcpECQERR;
     }
 
-    etcpMsgHead_t* msg = slot->buff;
-    if(seq != msg->data.seqNum){
+    const etcpMsgHead_t* const head = slot->buff;
+    const etcpMsgDatHdr_t* const datHdr = (const etcpMsgDatHdr_t* const)(head + 1);
+    unlikely(seq != datHdr->seqNum){
         WARN("Got an ACK for a packet that's gone.\n");
         return etcpENOERR;
     }
     //Successful ack! -- Do timing stats here
     DBG("Successful ack for seq %li at index=%li\n", seq, idx);
     //TODO XXX can do stats here.
-    (void)time;
+    const i64 totalRttTime     = ackTime->swTxTimeNs - head->ts.swTxTimeNs; //Total round trip
+    const i64 remoteProcessing = ackTime->swTxTimeNs - ackTime->swRxTimeNs; //Time in software on the remote side
+    //Not supported without NIC help, assume this is constant on both sides
+    //const i64 remoteHwTime     = ackTime->hwTxTimeNs - ackTime->hwRxTimeNs; //Time in hardware on the remote side
+    const i64 localHwTime      = ackTime->hwRxTimeNs - head->ts.hwTxTimeNs; //TIme in hardware on the local side
+    const i64 remoteHwTime     = localHwTime;
+    const i64 networkTime      = totalRttTime - remoteHwTime - remoteProcessing - localHwTime;
+    DBG("Packet spent %lins on the wire\n", networkTime);
 
     //Packet is now ack'd, we can release this slot and use it for another TX
     cqReleaseSlotRd(cq,idx);
@@ -291,24 +324,41 @@ etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpMsgTime_t* c
 
 
 
-etcpError_t etcpOnAck(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId)
+etcpError_t etcpOnAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
-    DBG("Working on new data message\n");
+    DBG("Working on new ack message\n");
+
+    const i64 minSizeSackHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgSackHdr_t);
+    unlikely(len < minSizeSackHdr){
+        WARN("Not enough bytes to parse sack header, required %li but got %li\n", minSizeSackHdr, len);
+        return etcpEBADPKT; //Bad packet, not enough data in it
+    }
+
+    //Got a valid data header, more sanity checking
+    const etcpMsgSackHdr_t* const sackHdr = (const etcpMsgSackHdr_t* const)(head + 1);
+    const uint64_t sackLen = len - minSizeSackHdr;
+    unlikely(sackLen != sackHdr->sackCount * sizeof(etcpSackField_t)){
+        WARN("Sack length has unexpected value. Expected %li, but got %li\n",sackLen, sackHdr->sackCount * sizeof(etcpSackField_t));
+        return etcpEBADPKT;
+    }
+    etcpSackField_t* const sackFields = (etcpSackField_t* const)(sackHdr + 1);
+
+    //Find the connection for this packet
     etcpConn_t* conn = etcpOnConnGet(flowId);
-    if(!conn){
+    unlikely(!conn){
         WARN("Trying to ACK a packet on a flow that doesn't exist?\n");
         return etcpENOTCONN; //Trying to ACK a packet on a flow that doesn't exist
     }
 
-    const uint64_t sackBaseSeq = msg->acks.sackBaseSeq;
     //Process the acks
-    for(i64 sackIdx = 0; sackIdx < msg->acks.sackCount; sackIdx++){
-        const uint16_t ackOffset = msg->acks.sacks[sackIdx].offset;
-        const uint16_t ackCount = msg->acks.sacks[sackIdx].count;
+    const uint64_t sackBaseSeq = sackHdr->sackBaseSeq;
+    for(i64 sackIdx = 0; sackIdx < sackHdr->sackCount; sackIdx++){
+        const uint16_t ackOffset = sackFields[sackIdx].offset;
+        const uint16_t ackCount  = sackFields[sackIdx].count;
         DBG("Working on ACKs between %li and %li\n", sackBaseSeq + ackOffset, sackBaseSeq + ackOffset + ackCount);
         for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
             const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
-            etcpDoAck(conn->txcq,ackSeq,&msg->timing);
+            etcpDoAck(conn->txcq,ackSeq,&head->ts);
         }
     }
 
@@ -319,46 +369,50 @@ etcpError_t etcpOnAck(const etcpMsgHead_t* msg, const etcpFlowId_t* const flowId
 
 
 
-etcpError_t etcpOnPacket( const void* const packet, const i64 len, i64 srcAddr, i64 dstAddr)
+etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
 {
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(etcpMsgHead_t);
-    if(len < minSizeHdr){
+    unlikely(len < minSizeHdr){
         WARN("Not enough bytes to parse header\n");
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
-    const etcpMsgHead_t* head = (etcpMsgHead_t*)packet;
+    etcpMsgHead_t* const head = (etcpMsgHead_t* const)packet;
 
-    etcpFlowId_t flowId = {
+    //Get a timestamp as soon as we know we have a place to put it.
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_REALTIME,&ts);
+    head->ts.hwRxTimeNs = hwRxTimeNs;
+    head->ts.swRxTimeNs  = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_sec;
+
+    //Do this in a common place since everyone needs it
+    const etcpFlowId_t flowId = {
         .srcAddr = srcAddr,
         .dstAddr = dstAddr,
         .srcPort = head->srcPort,
         .dstPort = head->dstPort,
     };
 
-    if()
+    //Now we can process the message
+    switch(head->fulltype){
+        case ETCP_V1_FULLHEAD(ETCP_CON):
+                etcpOnConn(&flowId);
+                /* no break */
+        case ETCP_V1_FULLHEAD(ETCP_FIN):
+        case ETCP_V1_FULLHEAD(ETCP_DAT):
+            return etcpOnDat(head, len, &flowId);
 
-    //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
-    //in one.
-    switch(head->type);
-    if(msg->typeFlags & UNCO_CON){
-        etcpOnConn(&flowId);
+        case ETCP_V1_FULLHEAD(ETCP_DEN):
+        case ETCP_V1_FULLHEAD(ETCP_ACK):
+            return etcpOnAck(head, len, &flowId);
+
+        default:
+            WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
+                    head->magic, ETCP_MAGIC, head->ver, ETCP_V1, head->type);
+            return etcpEBADPKT; //Bad packet, not enough data in it
     }
-
-    if(msg->typeFlags & UNCO_ACK){
-        etcpOnAck(msg, &flowId);
-    }
-
-    if(msg->typeFlags & UNCO_DAT){
-        etcpOnDat(msg, &flowId);
-    }
-
-    if(msg->typeFlags & UNCO_FIN){
-        //Do cleanup here. This is a bit of pain because we need to wait for any outstanding DAT packets to come in before we release resources
-        WARN("FIN is not implemented\n");
-    }
-
     return etcpENOERR;
+
 }
 
 
