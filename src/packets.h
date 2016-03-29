@@ -29,7 +29,7 @@ typedef struct __attribute__((packed)){
 
 _Static_assert(sizeof(etcpSackField_t) == 5 * sizeof(uint64_t) , "Don't let this grow too big, 40B is big enough!");
 
-#define UNCO_MAX_SACK 12 //This is arbitrarily set, to get a nice number of sacks, but make the packet not too big (~512B)
+#define ETCP_MAX_SACKS 12 //This is arbitrarily set, to get a nice number of sacks, but make the packet not too big (~512B)
 typedef struct __attribute__((packed)){
     i64 sackBaseSeq;
     uint64_t sackCount    : 8;  //Max 256 sack fields in a packet (256*32B = 8192B ~= 1 jumbo frame)
