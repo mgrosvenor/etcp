@@ -1,2 +1,2 @@
-# uncotp
-Uncontrolled Transmission Protocol
+# etcp
+External Tranmission Control Protocol
