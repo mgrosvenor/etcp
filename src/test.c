@@ -13,70 +13,8 @@
 #include "spooky_hash.h"
 #include "debug.h"
 
+#include "packets.h"
 
-
-//Bit field describing the types of this message
-enum {
-    UNCO_ERR = 0x00, //Not a valid message, something wrong
-    UNCO_CON = 0x01, //Start a new connection
-    UNCO_FIN = 0x02, //Is the last packet on this connection
-    UNCO_DAT = 0x04, //Contains valid data fields
-    UNCO_ACK = 0x08, //Contains valid acknowledgement fields
-    UNCO_DEN = 0x10, //Connection denied
-};
-
-
-typedef struct __attribute__((packed)){
-    uint16_t offset; //Offset from the base seq number
-    uint16_t count;  //Total number of
-} sackField_t;
-
-
-#define UNCO_MAX_SACK 8 //This number is determined by the max size of the header/fcs (128B) minus all of the other fields
-typedef struct __attribute__((packed)){
-    i64 sackBaseSeq;
-    uint16_t sackCount    : 3;  //Max 8 sack fields
-    uint16_t reserved     : 13; //Not in use right now
-    uint16_t rxWindowSegs : 16; //Max 65K  segment buffers
-    sackField_t sacks[UNCO_MAX_SACK];
-} etcpMsgSack_t;
-
-typedef struct __attribute__((packed)){
-    uint64_t seqNum;
-    uint32_t datLen; //Max 4G per message
-} etcpMsgDat_t;
-
-typedef struct __attribute__((packed)){
-    //Note 1: Client and server times cannot be compared unless there is some kind of time synchronisation (eg PTP)
-    //Note 2: Hardware cycle counts and software times cannot be compared unless there is time synchronisation
-    //Note 3: To save space, most times are 32bits only, which assumes that time differences will be <4 seconds.
-    //Note 4: Assumption 3 can be checked using swRxDatTimeNs - swTxDatTimeNs which is the absolute unix time.
-    i64 swTxDatTimeNs;   //Client Unix time in ns, used for RTT time estimation
-    i32 hwTxDatTimeCyc;  //Client hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i32 hwRxDatTimeCyc;  //Server hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i32 swRxDatTimeNs;   //Server Unix time in ns, used for host processing estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i32 swTxAckTimeNs;   //Server Unix time in ns, used for host processing estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i32 hwTxAckTimeCyc;  //Server hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i32 hwRxAckTimeCyc;  //Client hardware cycle counter, used for network time estimation, LOW BITS ONLY, assumes <4 seconds processing
-    i64 swRxAckTimeNs;   //Client Unix time in ns, used for RTT time estimation
-} etcpMsgTime_t;
-
-
-//Assumes a fast layer 2 network (10G plus), with reasonable latency. In this case, sending many more bits, is better than
-//sending many more packets at higher latency
-typedef struct __attribute__((packed)){
-    i32 ver       :6;   //Protocol version MAX 64 versions
-    i32 typeFlags :26;  //26 different message type flags, allows a message to be a CON, DAT, FIN and ACK all in 1.
-    i32 srcPort;        //Port on the TX side
-    i32 dstPort;        //Port on the RX side
-
-    etcpMsgTime_t timing; //Timing info for estimation
-    etcpMsgSack_t acks;   //All of the selective acknowledgements
-    etcpMsgDat_t  data;   //This MUST come last,data follows
-} etcpMsgHead_t;
-
-//NB: The minimum UnCo packet is thus 128B when using ethernet
-_Static_assert(sizeof(etcpMsgHead_t) == 128 - ETH_HLEN - 2 - ETH_FCS_LEN, "The UnCo mesage header is assumed to be 128 bytes including 16-18B of ethernet header + VLAN + FCS");
 
 
 typedef struct  __attribute__((packed)) {
@@ -389,23 +327,20 @@ etcpError_t etcpOnPacket( const void* const packet, const i64 len, i64 srcAddr, 
         WARN("Not enough bytes to parse header\n");
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
-    const etcpMsgHead_t* msg = (etcpMsgHead_t*)packet;
-
-    const i64 minSizeDat = minSizeHdr + msg->data.datLen;
-    if(len < minSizeDat){
-        WARN("Not enough bytes to parse data\n");
-        return etcpEBADPKT; //Bad packet, not enough data in it
-    }
+    const etcpMsgHead_t* head = (etcpMsgHead_t*)packet;
 
     etcpFlowId_t flowId = {
         .srcAddr = srcAddr,
         .dstAddr = dstAddr,
-        .srcPort = msg->srcPort,
-        .dstPort = msg->dstPort,
+        .srcPort = head->srcPort,
+        .dstPort = head->dstPort,
     };
+
+    if()
 
     //Now we can process it. The ordering here is specific, it is possible for a single packet to be a CON, ACT, DATA and FIN
     //in one.
+    switch(head->type);
     if(msg->typeFlags & UNCO_CON){
         etcpOnConn(&flowId);
     }
