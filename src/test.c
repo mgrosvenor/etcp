@@ -5,11 +5,12 @@
 #include <string.h>
 #include <pthread.h>
 
+
 #include <time.h>
 
 #include <sys/socket.h>
-
 #include <linux/if_ether.h>
+#include <arpa/inet.h>
 
 #include "CircularQueue.h"
 #include "types.h"
@@ -363,7 +364,6 @@ etcpError_t etcpOnAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId
     }
 
     return etcpENOERR;
-
 }
 
 
@@ -374,7 +374,7 @@ etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 ds
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(etcpMsgHead_t);
     unlikely(len < minSizeHdr){
-        WARN("Not enough bytes to parse header\n");
+        WARN("Not enough bytes to parse ETCP header\n");
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
     etcpMsgHead_t* const head = (etcpMsgHead_t* const)packet;
@@ -412,6 +412,47 @@ etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 ds
             return etcpEBADPKT; //Bad packet, not enough data in it
     }
     return etcpENOERR;
+
+}
+
+
+typedef struct __attribute__((packed)){
+    uint16_t pcp: 3;
+    uint16_t dei: 1;
+    uint16_t vid: 12;
+} eth8021qTCI_t;
+
+
+//The expected transport for ETCP is Ethernet, but really it doesn't care. PCIE/IPV4/6 could work as well.
+//This function codes the conversion from an Ethernet frame, supplied with a frame check sequence to the ETCP processor.
+//It expects that an out-of-band hardware timestamp is also passed in.
+etcpError_t etcpOnEthernetFrame( const void* const frame, const i64 len, i64 hwRxTimeNs)
+{
+    const i64 minSizeEHdr = sizeof(ETH_HLEN + ETH_FCS_LEN);
+       unlikely(len < minSizeEHdr){
+           WARN("Not enough bytes to parse Ethernet header, expected at least %li but got %li\n", minSizeEHdr, len);
+           return etcpEBADPKT; //Bad packet, not enough data in it
+       }
+       struct ethhdr* const eHead = (struct ethhdr* const) frame ;
+       uint64_t dstAddr = 0;
+       memcpy(&dstAddr, eHead->h_dest, ETH_ALEN);
+       uint64_t srcAddr = 0;
+       memcpy(&srcAddr, eHead->h_source, ETH_ALEN);
+       uint16_t proto = ntohs(eHead->h_proto);
+       const void*  packet = (void* const)(eHead + 1);
+
+       likely(proto == 0x8888 ){
+           return etcpOnPacket(packet,len - ETH_HLEN,srcAddr,dstAddr, hwRxTimeNs);
+       }
+
+       //This is a vlan tagged packet we can handle these too
+       likely(proto == ETH_P_8021Q){
+           packet = ((uint8_t*)packet + sizeof(eth8021qTCI_t));
+       }
+
+       WARN("Unknown EtherType 0x%04x\n", proto);
+
+       return etcpEBADPKT;
 
 }
 
@@ -454,6 +495,10 @@ etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 ds
 //
 //
 //u64 etcp_recv(int __fd, void *__buf, size_t __n, int __flags)
+//{
+//
+//}
+//u64 etcp_close(int __fd)
 //{
 //
 //}
