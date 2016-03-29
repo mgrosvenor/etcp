@@ -39,7 +39,8 @@ typedef struct __attribute__((packed)){
 
 typedef struct __attribute__((packed)){
     uint64_t seqNum;
-    uint64_t datLen; //Max 4G per message
+    uint32_t datLen;     //Max 4GB per message
+    uint32_t txAttempts; //Max 4 billion retires
 } etcpMsgDatHdr_t;
 
 //Enum describing the types of etcp packets.

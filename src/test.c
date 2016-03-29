@@ -23,6 +23,7 @@
 #define likely(x)       if(__builtin_expect((x),1))
 #define unlikely(x)     if(__builtin_expect((x),0))
 #define eqlikely(x)     if(x)
+#define MIN(x,y) ( (x) < (y) ?  (x) : (y))
 
 
 typedef struct  __attribute__((packed)) {
@@ -49,9 +50,14 @@ struct etcpConn {
 
     cq_t* rxcq; //Queue for incoming packets
     cq_t* txcq; //Queue for outgoing packets
+    cq_t* akcq; //Queue for outgoing acknowledgement packets
 
     i64 seqAck; //The current acknowledge sequence number
+    i64 seqSnd; //The current send sequence number
     etcpFlowId_t flowId;
+
+    int16_t vlan; //XXX HACK - this should be in some nice ethernet place, not here.
+    uint8_t priority; //XXX HACK - this should be in some nice ethernet place, not here.s
 };
 
 
@@ -75,10 +81,12 @@ typedef enum {
     etcpECQERR,       //Some issue with a Circular Queue
     etcpERANGE,       //Out of range
     etcpETOOBIG,      //The payload is too big for this buffer
+    etcpETRYAGAIN,    //There's nothing to see here, come back again
+    etcpEFATAL,       //Something irrecoverably bad!
 } etcpError_t;
 
 
-void etcpConnDelete(etcpConn_t* uc)
+static inline  void etcpConnDelete(etcpConn_t* const uc)
 {
     unlikely(!uc){ return; }
 
@@ -90,14 +98,14 @@ void etcpConnDelete(etcpConn_t* uc)
 }
 
 
-int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId_t* __restrict rhs)
+static inline int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId_t* __restrict rhs)
 {
     //THis is ok because flows are packed
     return memcmp(lhs,rhs, sizeof(etcpFlowId_t));
 }
 
 
-etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize, const etcpFlowId_t* flowId)
+static inline  etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize, const etcpFlowId_t* flowId)
 {
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     unlikely(!conn){ return NULL; }
@@ -127,7 +135,7 @@ static inline i64 getIdx(const etcpFlowId_t* const flowId)
 }
 
 
-etcpError_t etcpOnConnAdd( i64 windowSegs, i64 segSize, const etcpFlowId_t* const newFlowId)
+static inline etcpError_t etcpConnAdd( i64 windowSegs, i64 segSize, const etcpFlowId_t* const newFlowId)
 {
     const i64 idx = getIdx(newFlowId);
     etcpConn_t* conn = etcpState.conns[idx];
@@ -153,7 +161,7 @@ etcpError_t etcpOnConnAdd( i64 windowSegs, i64 segSize, const etcpFlowId_t* cons
 }
 
 
-etcpConn_t* etcpOnConnGet(const etcpFlowId_t* const getFlowId)
+static inline etcpConn_t* etcpConnGet(const etcpFlowId_t* const getFlowId)
 {
     const i64 idx = getIdx(getFlowId);
     etcpConn_t* conn = etcpState.conns[idx];
@@ -175,37 +183,37 @@ etcpConn_t* etcpOnConnGet(const etcpFlowId_t* const getFlowId)
     return NULL;
 }
 
-
-void etcpOnConnDel(const etcpFlowId_t* const delFlowId)
-{
-    const i64 idx = getIdx(delFlowId);
-    etcpConn_t* conn = etcpState.conns[idx];
-    unlikely(conn == NULL){
-        return;
-    }
-
-    eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
-        etcpState.conns[idx] = conn->next;
-        etcpConnDelete(conn);
-    }
-
-    //Something already in the hash table, traverse to the end
-    etcpConn_t* prev = conn;
-    for(; conn->next; conn = conn->next){}{
-        eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
-            prev->next = conn->next;
-            etcpConnDelete(conn);
-        }
-        prev = conn;
-    }
-
-}
+//TODO XXX - currently unused!
+//static inline void etcpConnDel(const etcpFlowId_t* const delFlowId)
+//{
+//    const i64 idx = getIdx(delFlowId);
+//    etcpConn_t* conn = etcpState.conns[idx];
+//    unlikely(conn == NULL){
+//        return;
+//    }
+//
+//    eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
+//        etcpState.conns[idx] = conn->next;
+//        etcpConnDelete(conn);
+//    }
+//
+//    //Something already in the hash table, traverse to the end
+//    etcpConn_t* prev = conn;
+//    for(; conn->next; conn = conn->next){}{
+//        eqlikely(cmpFlowId(&conn->flowId, delFlowId) == 0){
+//            prev->next = conn->next;
+//            etcpConnDelete(conn);
+//        }
+//        prev = conn;
+//    }
+//
+//}
 
 #define MAXSEGS 1024
 #define MAXSEGSIZE (2048 - sizeof(etcpConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
-static inline etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
+static inline etcpError_t etcpOnRxConn(const etcpFlowId_t* const flowId )
 {
-    etcpError_t err = etcpOnConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
+    etcpError_t err = etcpConnAdd(MAXSEGS, MAXSEGSIZE, flowId);
     unlikely(err != etcpENOERR){
         printf("Error adding connection, ignoring\n");
         return err;
@@ -215,7 +223,7 @@ static inline etcpError_t etcpOnConn(const etcpFlowId_t* const flowId )
 }
 
 
-static inline etcpError_t etcpOnDat(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
+static inline etcpError_t etcpOnRxDat(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new data message with type = 0x%016x\n", head->type);
 
@@ -236,7 +244,7 @@ static inline etcpError_t etcpOnDat(const etcpMsgHead_t* head, const i64 len, co
     DBG("Working on new data message with len = 0x%016x\n", datHdr->datLen);
 
     //Find the connection for this packet
-    etcpConn_t* conn = etcpOnConnGet(flowId);
+    etcpConn_t* conn = etcpConnGet(flowId);
     unlikely(!conn){
         WARN("Error data packet for invalid connection\n");
         return etcpENOTCONN;
@@ -285,7 +293,7 @@ static inline etcpError_t etcpOnDat(const etcpMsgHead_t* head, const i64 len, co
 }
 
 
-etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
+static inline  etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
 {
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
@@ -325,7 +333,7 @@ etcpError_t etcpDoAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* cons
 
 
 
-etcpError_t etcpOnAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
+static inline  etcpError_t etcpOnRxAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new ack message\n");
 
@@ -345,7 +353,7 @@ etcpError_t etcpOnAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId
     etcpSackField_t* const sackFields = (etcpSackField_t* const)(sackHdr + 1);
 
     //Find the connection for this packet
-    etcpConn_t* conn = etcpOnConnGet(flowId);
+    etcpConn_t* conn = etcpConnGet(flowId);
     unlikely(!conn){
         WARN("Trying to ACK a packet on a flow that doesn't exist?\n");
         return etcpENOTCONN; //Trying to ACK a packet on a flow that doesn't exist
@@ -369,7 +377,7 @@ etcpError_t etcpOnAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId
 
 
 
-etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxPacket( const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
 {
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(etcpMsgHead_t);
@@ -396,15 +404,14 @@ etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 ds
     //Now we can process the message
     switch(head->fulltype){
         case ETCP_V1_FULLHEAD(ETCP_CON):
-                etcpOnConn(&flowId);
+                etcpOnRxConn(&flowId);
                 /* no break */
-        case ETCP_V1_FULLHEAD(ETCP_FIN):
+        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
         case ETCP_V1_FULLHEAD(ETCP_DAT):
-            return etcpOnDat(head, len, &flowId);
+            return etcpOnRxDat(head, len, &flowId);
 
-        case ETCP_V1_FULLHEAD(ETCP_DEN):
         case ETCP_V1_FULLHEAD(ETCP_ACK):
-            return etcpOnAck(head, len, &flowId);
+            return etcpOnRxAck(head, len, &flowId);
 
         default:
             WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
@@ -415,18 +422,19 @@ etcpError_t etcpOnPacket( const void* packet, const i64 len, i64 srcAddr, i64 ds
 
 }
 
-
 typedef struct __attribute__((packed)){
     uint16_t pcp: 3;
     uint16_t dei: 1;
     uint16_t vid: 12;
 } eth8021qTCI_t;
 
+#define ETH_P_ECTP 0x8888
+
 
 //The expected transport for ETCP is Ethernet, but really it doesn't care. PCIE/IPV4/6 could work as well.
 //This function codes the conversion from an Ethernet frame, supplied with a frame check sequence to the ETCP processor.
 //It expects that an out-of-band hardware timestamp is also passed in.
-etcpError_t etcpOnEthernetFrame( const void* const frame, const i64 len, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxEthernetFrame( const void* const frame, const i64 len, i64 hwRxTimeNs)
 {
     const i64 minSizeEHdr = sizeof(ETH_HLEN + ETH_FCS_LEN);
        unlikely(len < minSizeEHdr){
@@ -439,20 +447,133 @@ etcpError_t etcpOnEthernetFrame( const void* const frame, const i64 len, i64 hwR
        uint64_t srcAddr = 0;
        memcpy(&srcAddr, eHead->h_source, ETH_ALEN);
        uint16_t proto = ntohs(eHead->h_proto);
-       const void*  packet = (void* const)(eHead + 1);
 
-       likely(proto == 0x8888 ){
-           return etcpOnPacket(packet,len - ETH_HLEN,srcAddr,dstAddr, hwRxTimeNs);
+       const void* packet = (void* const)(eHead + 1);
+       i64 packetLen      = len - ETH_HLEN - ETH_FCS_LEN;
+
+       likely(proto == ETH_P_ECTP ){
+           return etcpOnRxPacket(packet,packetLen,srcAddr,dstAddr, hwRxTimeNs);
        }
 
-       //This is a vlan tagged packet we can handle these too
+       //This is a VLAN tagged packet we can handle these too
        likely(proto == ETH_P_8021Q){
-           packet = ((uint8_t*)packet + sizeof(eth8021qTCI_t));
+           packet    = ((uint8_t*)packet + sizeof(eth8021qTCI_t));
+           packetLen = len - sizeof(eth8021qTCI_t);
+           return etcpOnRxPacket(packet,packetLen,srcAddr,dstAddr, hwRxTimeNs);
        }
 
        WARN("Unknown EtherType 0x%04x\n", proto);
 
        return etcpEBADPKT;
+
+}
+
+
+static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, const uint64_t srcAddr, const uint64_t dstAddr, const i16 vlan, const uint8_t priority )
+{
+    const i64 len = *len_io;
+    unlikely(len < ETH_ZLEN){
+        ERR("Not enough bytes in Ethernet frame. Required %li but got %i\n", ETH_ZLEN, len );
+        return etcpEFATAL;
+    }
+
+    struct ethhdr* const ethHdr = buff;
+
+    memcpy(&ethHdr->h_dest, &dstAddr, ETH_ALEN);
+    memcpy(&ethHdr->h_source, &srcAddr, ETH_ALEN);
+    ethHdr->h_proto = htons(ETH_P_ECTP);
+
+    eqlikely(vlan < 0){
+        //No VLAN tag header, we're done!
+        *len_io = ETH_HLEN;
+        return etcpENOERR;
+    }
+
+    eth8021qTCI_t* vlanHdr = (eth8021qTCI_t*)(ethHdr + 1);
+    vlanHdr->dei= 0;
+    vlanHdr->vid = vlan;
+    vlanHdr->pcp = priority;
+
+    *len_io = ETH_HLEN + sizeof(eth8021qTCI_t);
+    return etcpENOERR;
+
+
+}
+
+//Assumes ethernet packets, does in-place construction of a packet
+static inline etcpError_t etcpEthSend(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io)
+{
+    const i64 toSendLen = *toSendLen_io;
+    i64 bytesSent = 0;
+
+    cq_t* const txcq = conn->txcq;
+    while(bytesSent< toSendLen){
+        cqSlot_t* slot = NULL;
+        i64 slotIdx = 0;
+        cqError_t cqErr = cqGetNextWr(txcq,&slot,&slotIdx);
+
+        //We haven't send as much as we'd hoped, set the len_io and tell user to try again
+        unlikely(cqErr == cqENOSLOT){
+            *toSendLen_io = bytesSent;
+            return etcpETRYAGAIN;
+        }
+        //Some other strange error. Shit.
+        else unlikely(cqErr != cqENOERR){
+            ERR("Error on circular queue: %s", cqError2Str(cqErr));
+            return etcpECQERR;
+        }
+
+        //We got a slot, now format a packet into it
+        i8* buff = slot->buff;
+        i64 buffLen = slot->len;
+        i64 ethLen = buffLen;
+        etcpError_t etcpErr = etcpMkEthPkt(buff,&ethLen,conn->flowId.srcAddr, conn->flowId.dstAddr,conn->vlan, conn->priority);
+        unlikely(etcpErr != etcpENOERR){
+            WARN("Could not format Ethernet packet\n");
+            return etcpErr;
+        }
+        buff += ethLen;
+        buffLen -= ethLen;
+
+        const i64 hdrsLen = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
+        unlikely(buffLen < hdrsLen + 1){ //Should be able to send at least 1 byte!
+            ERR("Slot lengths are too small!");
+            return etcpEFATAL;
+        }
+        const i64 datSpace = buffLen - hdrsLen;
+        const i64 datLen   = MIN(datSpace,toSendLen);
+
+        struct timespec ts = {0};
+        clock_gettime(CLOCK_REALTIME,&ts);
+        etcpMsgHead_t* const head = (etcpMsgHead_t* const)buff;
+        head->fulltype      = ETCP_V1_FULLHEAD(ETCP_DAT);
+        head->srcPort       = conn->flowId.srcPort;
+        head->dstPort       = conn->flowId.dstPort;
+        head->ts.swTxTimeNs = ts.tv_nsec * 1000 * 1000 * 1000 + ts.tv_nsec;
+
+        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
+
+        datHdr->datLen     = datLen;
+        datHdr->seqNum     = conn->seqSnd;
+        datHdr->txAttempts = 0;
+
+        void* const msgDat = (void* const)(datHdr + 1);
+        memcpy(msgDat,toSendData,datLen);
+
+        //At this point, the packet is now ready to send!
+        const i64 totalLen = ethLen + hdrsLen + datLen;
+        cqErr = cqCommitSlot(conn->txcq,slotIdx, totalLen);
+        unlikely(cqErr != cqENOERR){
+            ERR("Error on circular queue: %s", cqError2Str(cqErr));
+            return etcpECQERR;
+        }
+
+        bytesSent += datLen;
+
+    }
+
+    *toSendLen_io = bytesSent;
+    return etcpENOERR;
 
 }
 
