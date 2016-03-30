@@ -151,13 +151,14 @@ cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx);
 
 
 /**
- * @brief       Equivalent to GetNextRd, memcopy, ReleaseSlot.
- * @param cq    The CQ structure that we're operating on
- * @param data  Place where you want to have data copied out of the slot
- * @param len   Length of the data area,
+ * @brief           Equivalent to GetNextRd, memcopy, ReleaseSlot.
+ * @param cq        The CQ structure that we're operating on
+ * @param data      Place where you want to have data copied out of the slot
+ * @param len       Length of the data area,
+ * @param slotIdx   The index of the slot to commit
  * @return      ESUCCESS, ETURNC
  */
-cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io);
+cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const slotIdx);
 
 /**
  * @brief       Get a slot at the given index

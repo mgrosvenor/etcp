@@ -41,8 +41,10 @@ typedef struct __attribute__((packed)){
     uint64_t seqNum;
     uint32_t datLen;        //Max 4GB per message
     uint16_t txAttempts;    //Max 64k retires
-    uint16_t reserved : 15; //Nothing here
-    uint16_t noAck :    1;  //Tell the receiver not to generate an ack for this packet
+    uint16_t reserved : 13; //Nothing here
+    uint16_t noAck    :  1; //Tell the receiver not to generate an ack for this packet
+    uint16_t ackSent  :  1; //Has the ack for this packet been sent? Only pass the packet up to the user if it has.
+    uint16_t staleDat :  1; //Has this packet already been seen before. If so, don't give it back to the user
 
 } etcpMsgDatHdr_t;
 
@@ -51,8 +53,8 @@ typedef enum {
     ETCP_ERR = 0x00, //Not a valid message, something wrong
 
     //Uses the the data message packet format
-    ETCP_CON = 0x01, //The first packet on this connection
-    ETCP_FIN = 0x02, //Is the last packet on this connection
+    //ETCP_CON = 0x01, //The first packet on this connection
+    //ETCP_FIN = 0x02, //Is the last packet on this connection
     ETCP_DAT = 0x03, //Just another data packet
 
     //Uses the acknowledgement packet format

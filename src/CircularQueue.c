@@ -266,16 +266,14 @@ cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx)
     return cqENOERR;
 }
 
-cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io)
+cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const slotIdx_o)
 {
     if(cq == NULL || data == NULL || len_io == NULL){
         return cqNULLPARAM;
     }
 
-
     cqSlot_t* slot = NULL;
-    i64 idx = -1;
-    cqError_t err = cqGetNextRd(cq, &slot, &idx);
+    cqError_t err = cqGetNextRd(cq, &slot, slotIdx_o);
     if(err != cqENOERR){
         return err;
     }
@@ -284,8 +282,6 @@ cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io)
     const i64 toCopy = min(len, slot->len);
     *len_io = toCopy;
     memcpy(data,slot->buff,toCopy);
-
-    cqReleaseSlotRd(cq,idx);
 
     if(toCopy < slot->len){
         return cqETRUNC;
