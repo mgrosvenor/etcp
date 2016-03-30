@@ -24,23 +24,26 @@ typedef struct __attribute__((packed)){
 typedef struct __attribute__((packed)){
     uint32_t offset; //Offset from the base seq number, max 4 billion
     uint32_t count;  //Number of ack's in this range max, 4 billion
-    etcpTime_t time;
 } etcpSackField_t;
 
-_Static_assert(sizeof(etcpSackField_t) == 5 * sizeof(uint64_t) , "Don't let this grow too big, 40B is big enough!");
+_Static_assert(sizeof(etcpSackField_t) == 1 * sizeof(uint64_t) , "Don't let this grow too big, 40B is big enough!");
 
-#define ETCP_MAX_SACKS 12 //This is arbitrarily set, to get a nice number of sacks, but make the packet not too big (~512B)
 typedef struct __attribute__((packed)){
     i64 sackBaseSeq;
     uint64_t sackCount    : 8;  //Max 256 sack fields in a packet (256*32B = 8192B ~= 1 jumbo frame)
     uint64_t reserved     : 24; //Not in use right now
     uint64_t rxWindowSegs : 32; //Max 4B segment buffers in the rx window
+    etcpTime_t timeFirst;
+    etcpTime_t timeLast;
 } etcpMsgSackHdr_t;
 
 typedef struct __attribute__((packed)){
     uint64_t seqNum;
-    uint32_t datLen;     //Max 4GB per message
-    uint32_t txAttempts; //Max 4 billion retires
+    uint32_t datLen;        //Max 4GB per message
+    uint16_t txAttempts;    //Max 64k retires
+    uint16_t reserved : 15; //Nothing here
+    uint16_t noAck :    1;  //Tell the receiver not to generate an ack for this packet
+
 } etcpMsgDatHdr_t;
 
 //Enum describing the types of etcp packets.
@@ -76,9 +79,26 @@ typedef struct __attribute__((packed)){
 
     etcpTime_t ts; //Timing info for estimation
 } etcpMsgHead_t;
-
-
 _Static_assert(sizeof(etcpMsgHead_t) == 6 * sizeof(uint64_t) , "Don't let this grow too big, 48B is big enough!");
+
+//This is arbitrarily set, to get a nice number of sacks, but make the packet not too big (~256B)
+//TODO XXX reevaluate this later to see if the trade-off is ok. Should it be bigger or smaller or am I so awesome that I got
+//it right first guess (unlikely...).
+//Current sizes: 256B Max packet
+//Ethernet overheads: Header 14, FCS, 4, VALN 2 = 20B
+//ETCP header: 6 * 8B = 48B
+//Ack header: 10 * 8B = 80B
+//Sack field size: 8B
+//Space = 256 - 20 - 48 - 80 = 108
+//Sack count = 13 ranges per packet.
+//This means that each sack packet can handle at most 13 dropped packets, or 4 billion recived packets.
+#define ETCP_MAX_SACK_PKT (256LL)
+#define ETCP_ETH_OVERHEAD (ETH_HLEN + ETH_FCS_LEN + 2)
+#define ETCP_SACKHDR_OVERHEAD (sizeof(etcpMsgHead_t) + sizeof(etcpMsgSackHdr_t))
+#define ETCP_MAX_SACKS ( (i64)((ETCP_MAX_SACK_PKT - ETCP_ETH_OVERHEAD - ETCP_SACKHDR_OVERHEAD) / (sizeof(etcpSackField_t))) )
+_Static_assert(ETCP_MAX_SACKS >= 10 , "Make sure there is some reasonable number of sacks available");
+
+
 
 #define ETCP_MAGIC 0x45544350ULL //"ETCP" in ASCII
 #define ETCP_V1 0x1ULL
