@@ -9,8 +9,10 @@
 #define SPOOKY_HASH_H_
 
 /*
- * This is a port of Bob Jenkins Spooky Hash from C++ to C. Port by M. P. Grosvenor.
- * http://burtleburtle.net/bob/hash/spooky.html
+ * This is a port of Bob Jenkins Spooky Hash from C++ to C.
+ * Port by M. P. Grosvenor.
+ *
+ * Original source http://burtleburtle.net/bob/hash/spooky.html
  */
 
 // SpookyHash: a 128-bit noncryptographic hash function

@@ -16,14 +16,84 @@
 #include "etcp.h"
 
 
-typedef struct etcpSocket_s
-{
-    i64 listenMax; //Maximum length of listen queue before connections are auto rejected. If 0, the socket is not listening
-    i64 listenCount; //Current length of the listen queue
-    etcpState_t* etcpState; //Back reference to the etcp global state
-    etcpConn_t* conns; //1 or more connections to listen / send / rx on
+//This structure contains all unique source address/port combination connections for a given destination address/port combination.
+typedef struct etcpSrcConnTable_s etcpSrcConnTable_t;
+typedef struct etcpSrcConnTable_s {
+    uint64_t dstAddr;
+    uint64_t dstPort;
 
-} etcpSocket_t;
+    etcpState_t* etcpState; //Back reference to the etcp global state
+
+    i64 listenQMax; //Maximum length of listen queue before connections are auto rejected. If 0, the socket is not listening
+    i64 listenQCount; //Current length of the listen queue
+    etcpConn_t* listenQ; //Queue containing connections that have not yet been accepted
+
+    i64 connsHTMaxLog2;
+    i64 connsHTMMax;
+    etcpConn_t** connsHashTable; //Queue containing all connections
+
+    etcpSrcConnTable_t* next; //For chaining elements in the dstConTable hash table
+
+} etcpSrcConnTable_t;
+
+
+typedef struct etcpDstConnTable_s{
+    i64 connTablesHTMaxLog2;
+    i64 connTablesHTMMax;
+    etcpSrcConnTable_t** connTablesHT; //Queue containing all connections
+} etcpDstConnTable_s;
+
+
+struct etcpState_s {
+
+    void* ethHwState;
+    ethHwTx_f ethHwTx;
+    ethHwRx_f ethHwRx;
+
+
+};
+
+
+void deleteEtcpState(etcpState_t* etcpState)
+{
+    if(!etcpState){
+        return;
+    }
+
+//    if(etcpState->connsHashTable){
+//        free(etcpState->connsHashTable);
+//    }
+
+    free(etcpState);
+}
+
+
+etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const uint64_t maxConnsLog2)
+{
+    etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
+    if(!etcpState){
+        return NULL;
+    }
+
+//    etcpState->maxConnsLog2 = maxConnsLog2;
+//    etcpState->maxConns     = 1 << maxConnsLog2;
+//
+//    etcpState->connsHashTable = (etcpConn_t**)calloc(etcpState->maxConns, sizeof(etcpConn_t*));
+//    if(!etcpState->connsHashTable){
+//        deleteEtcpState(etcpState);
+//        return NULL;
+//    }
+
+    etcpState->ethHwRx    = ethHwRx;
+    etcpState->ethHwTx    = ethHwTx;
+    etcpState->ethHwState = ethHwState;
+
+    //This is a dumb way to do this but should be sufficient for the moment
+    etcpState->portDirectory = calloc()
+
+    return etcpState;
+
+}
 
 
 //Make a new "socket" for either listening on or writing to
@@ -42,6 +112,9 @@ etcpSocket_t* newEtcpSocket(etcpState_t* const etcpState)
 //Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
 etcpError_t etcpConnect(etcpSocket_t* const sock, const uint64_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
 {
+    etcpState_t* const state = sock->etcpState;
+    state->connsHashTable
+
     return etcpENOERR;
 }
 

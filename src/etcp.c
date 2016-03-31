@@ -75,58 +75,6 @@ struct etcpConn_s {
 
 
 
-struct etcpState_s {
-    i64 maxConnsLog2;
-    i64 maxConns;
-    etcpConn_t** connsHashTable;
-    void* ethHwState;
-    ethHwTx_f ethHwTx;
-    ethHwRx_f ethHwRx;
-
-
-};
-
-
-
-void deleteEtcpState(etcpState_t* etcpState)
-{
-    if(!etcpState){
-        return;
-    }
-
-    if(etcpState->connsHashTable){
-        free(etcpState->connsHashTable);
-    }
-
-    free(etcpState);
-}
-
-
-etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const uint64_t maxConnsLog2)
-{
-    etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
-    if(!etcpState){
-        return NULL;
-    }
-
-    etcpState->maxConnsLog2 = maxConnsLog2;
-    etcpState->maxConns     = 1 << maxConnsLog2;
-
-    etcpState->connsHashTable = (etcpConn_t**)calloc(etcpState->maxConns, sizeof(etcpConn_t*));
-    if(!etcpState->connsHashTable){
-        deleteEtcpState(etcpState);
-        return NULL;
-    }
-
-    etcpState->ethHwRx    = ethHwRx;
-    etcpState->ethHwTx    = ethHwTx;
-    etcpState->ethHwState = ethHwState;
-
-    return etcpState;
-
-}
-
-
 
 static inline  void etcpConnDelete(etcpConn_t* const uc)
 {

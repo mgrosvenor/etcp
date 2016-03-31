@@ -26,7 +26,7 @@ typedef struct __attribute__((packed)){
     uint32_t count;  //Number of ack's in this range max, 4 billion
 } etcpSackField_t;
 
-_Static_assert(sizeof(etcpSackField_t) == 1 * sizeof(uint64_t) , "Don't let this grow too big, 40B is big enough!");
+_Static_assert(sizeof(etcpSackField_t) == 1 * sizeof(uint64_t) , "Don't let this grow too big, 8B is big enough!");
 
 typedef struct __attribute__((packed)){
     i64 sackBaseSeq;
@@ -75,25 +75,24 @@ typedef struct __attribute__((packed)){
         };
         uint64_t fulltype; //A full type is the magic string, version number and message type in one 64bit into make it easy to parse
     };
-
-    uint32_t srcPort;    //"port" on the tx side, max 4 billion ports
-    uint32_t dstPort;    //"port" on the rx side, max 4 billion ports
+    uint64_t srcPort;    //"port" on the tx side, max 4 billion ports
+    uint64_t dstPort;    //"port" on the rx side, max 4 billion ports
 
     etcpTime_t ts; //Timing info for estimation
 } etcpMsgHead_t;
-_Static_assert(sizeof(etcpMsgHead_t) == 6 * sizeof(uint64_t) , "Don't let this grow too big, 48B is big enough!");
+_Static_assert(sizeof(etcpMsgHead_t) == 7 * sizeof(uint64_t) , "Don't let this grow too big, 48B is big enough!");
 
 //This is arbitrarily set, to get a nice number of sacks, but make the packet not too big (~256B)
 //TODO XXX reevaluate this later to see if the trade-off is ok. Should it be bigger or smaller or am I so awesome that I got
 //it right first guess (unlikely...).
 //Current sizes: 256B Max packet
 //Ethernet overheads: Header 14, FCS, 4, VALN 2 = 20B
-//ETCP header: 6 * 8B = 48B
+//ETCP header: 7 * 8B = 56B
 //Ack header: 10 * 8B = 80B
 //Sack field size: 8B
-//Space = 256 - 20 - 48 - 80 = 108
-//Sack count = 13 ranges per packet.
-//This means that each sack packet can handle at most 13 dropped packets, or 4 billion recived packets.
+//Space = 256 - 20 - 56 - 80 = 108
+//Sack count = 12 ranges per packet.
+//This means that each sack packet can handle at most 12 dropped packets, or 4 billion recived packets.
 #define ETCP_MAX_SACK_PKT (256LL)
 #define ETCP_ETH_OVERHEAD (ETH_HLEN + ETH_FCS_LEN + 2)
 #define ETCP_SACKHDR_OVERHEAD (sizeof(etcpMsgHead_t) + sizeof(etcpMsgSackHdr_t))
