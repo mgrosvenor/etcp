@@ -53,7 +53,7 @@ struct etcpConn_s {
 
     etcpFlowId_t flowId;
 
-    etcpConn_t* next;   //For chaining in the hashtable
+    etcpConn_t* next;   //For chaining into a list/queue
     etcpState_t* state; //For working back to the global state
 
     cq_t* rxcq; //Queue for incoming packets
@@ -102,7 +102,7 @@ void deleteEtcpState(etcpState_t* etcpState)
 }
 
 
-etcpState_t* newEtcpState(void* ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const i64 maxConnsLog2)
+etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const uint64_t maxConnsLog2)
 {
     etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
     if(!etcpState){
@@ -933,3 +933,6 @@ etcpError_t etcpEtcpUserTx(etcpConn_t* const conn, const void* const toSendData,
     return etcpENOERR;
 
 }
+
+
+

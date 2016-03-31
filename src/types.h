@@ -21,4 +21,19 @@ typedef int32_t i32;
 typedef int64_t i64;
 
 
+typedef enum {
+    etcpENOERR,       //Success!
+    etcpENOMEM,       //Ran out of memory
+    etcpEBADPKT,      //Bad packet, not enough bytes for a header
+    etcpEALREADY,     //Already connected!
+    etcpETOOMANY,     //Too many connections, we've run out!
+    etcpENOTCONN,     //Not connected to anything
+    etcpECQERR,       //Some issue with a Circular Queue
+    etcpERANGE,       //Out of range
+    etcpETOOBIG,      //The payload is too big for this buffer
+    etcpETRYAGAIN,    //There's nothing to see here, come back again
+    etcpEFATAL,       //Something irrecoverably bad happened! Stop the world!
+} etcpError_t;
+
+
 #endif /* SRC_TYPES_H_ */

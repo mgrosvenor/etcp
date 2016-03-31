@@ -1,5 +1,6 @@
 #include <stdio.h>
-#include "etcp.h"
+#include "etcpSockApi.h"
+
 
 //
 //
