@@ -69,7 +69,10 @@ void htRem(ht_t* const ht, const htKey_t* const key );
  * Free all resources associated with the hashtable
  * @param ht
  */
-void htDelete(ht_t* const ht);
+//deleteCB is a callback which (if not null) will be called just before deleting each key entry. This gives the user the
+//option to cleanup their own code.
+typedef void (*deleteCb_f)(const htKey_t* const key,  void* const value);
+void htDelete(ht_t* const ht, deleteCb_f deleteCb);
 
 #endif /* SRC_HASHTABLE_H_ */
 

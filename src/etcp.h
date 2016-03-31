@@ -28,7 +28,7 @@ typedef int64_t (*ethHwTx_f)(void* const hwState, const void* const data, const 
 typedef int64_t (*ethHwRx_f)(void* const hwState, const void* const data, const uint64_t len, uint64_t* const hwRxTimeNs );
 
 //Setup the ETCP internal state
-etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const uint64_t maxConnsLog2);
+etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx);
 
 etcpError_t doEtcpUserTx(etcpConn_t* const conn, const i64 connId, const void* const toSendData, i64* const toSendLen_io);
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, const i64 connId, void* __restrict data, i64* const len_io);
@@ -36,6 +36,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, const i64 connId, void* __restr
 etcpError_t doEtcpNetTx(etcpConn_t* const conn, i64 connId);
 void doEtcpNetRx(etcpConn_t* const conn);
 
+static inline  void etcpConnDelete(etcpConn_t* const conn);
 
 
 #endif /* SRC_ETCP_H_ */

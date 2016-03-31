@@ -223,7 +223,7 @@ void htRem(ht_t* const ht, const htKey_t* const key )
  * Free all resources associated with the hashtable
  * @param ht
  */
-void htDelete(ht_t* const ht)
+void htDelete(ht_t* const ht, deleteCb_f deleteCb)
 {
     //Look at each table entry
     for(uint64_t i = 0; i < ht->tableEntries; i++){
@@ -237,6 +237,9 @@ void htDelete(ht_t* const ht)
         //Free all list elements
         for(htEntry_t* entryNext = entry->next; entry != NULL; ){
             entryNext = entry->next;
+            if(deleteCb != NULL){
+                deleteCb(&entry->key, entry->value);
+            }
             free(entry);
             entry = entryNext;
         }

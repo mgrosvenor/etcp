@@ -76,14 +76,14 @@ struct etcpConn_s {
 
 
 
-static inline  void etcpConnDelete(etcpConn_t* const uc)
+static inline  void etcpConnDelete(etcpConn_t* const conn)
 {
-    if_unlikely(!uc){ return; }
+    if_unlikely(!conn){ return; }
 
-    if_likely(uc->txcq != NULL){ cqDelete(uc->txcq); }
-    if_likely(uc->rxcq != NULL){ cqDelete(uc->rxcq); }
+    if_likely(conn->txcq != NULL){ cqDelete(conn->txcq); }
+    if_likely(conn->rxcq != NULL){ cqDelete(conn->rxcq); }
 
-    free(uc);
+    free(conn);
 
 }
 

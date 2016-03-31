@@ -15,6 +15,7 @@
 #include "HashTable.h"
 
 #define HT_ASSERT(p) do { if(!(p)) { fprintf(stdout, "Error in %s: failed assertion \""#p"\" on line %u\n", __FUNCTION__, __LINE__); result = 0; return result; } } while(0)
+#define HT_ASSERT_NR(p) do { if(!(p)) { fprintf(stdout, "Error in %s: failed assertion \""#p"\" on line %u\n", __FUNCTION__, __LINE__); return; } } while(0)
 
 typedef struct htEntry_s htEntry_t;
 typedef struct htEntry_s {
@@ -38,13 +39,42 @@ bool test1()
     HT_ASSERT( ht->tableEntriesLog2 == 16);
     HT_ASSERT( ht->tableEntries == 65536);
     HT_ASSERT( ht->table);
-    htDelete(ht);
+    htDelete(ht,NULL);
 
     return result;
 }
 
 
+void test2Cleanup(const htKey_t* const key, void* const value)
+{
+    (void)key;
+    (void)value;
+    HT_ASSERT_NR(!"Should not get here!");
+}
+
 bool test2()
+{
+    bool result = true;
+    ht_t* ht = htNew(16);
+    HT_ASSERT( ht->tableEntriesLog2 == 16);
+    HT_ASSERT( ht->tableEntries == 65536);
+    HT_ASSERT( ht->table);
+    htDelete(ht,test2Cleanup);
+
+    return result;
+}
+
+void test3Cleanup(const htKey_t* const key, void* const value)
+{
+    HT_ASSERT_NR(key->keyHi == 1);
+    HT_ASSERT_NR(key->keyLo == 1);
+
+    i64* const valueInt = (i64* const)value;
+    HT_ASSERT_NR(*valueInt == 3);
+}
+
+
+bool test3()
 {
     bool result = true;
     ht_t* ht = htNew(16);
@@ -53,12 +83,12 @@ bool test2()
     htError_t  err = htAddNew(ht,&key,&value);
     HT_ASSERT(err == htENOEROR);
 
-    htDelete(ht);
+    htDelete(ht,test3Cleanup);
 
     return result;
 }
 
-bool test3()
+bool test4()
 {
     bool result = true;
     ht_t* ht = htNew(16);
@@ -74,13 +104,13 @@ bool test3()
     HT_ASSERT( valueOut = &value);
     HT_ASSERT( *valueOut = value);
 
-    htDelete(ht);
+    htDelete(ht, NULL);
 
     return result;
 }
 
 
-bool test4()
+bool test5()
 {
     bool result = true;
     ht_t* ht = htNew(16);
@@ -99,7 +129,7 @@ bool test4()
     htRem(ht,&key);
 
 
-    htDelete(ht);
+    htDelete(ht,NULL);
 
     return result;
 }
@@ -116,5 +146,7 @@ int main(int argc, char** argv)
     printf("ETCP Data Structures: Hash Table Test 02: ");  printf("%s", (test_pass = test2()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     printf("ETCP Data Structures: Hash Table Test 03: ");  printf("%s", (test_pass = test3()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     printf("ETCP Data Structures: Hash Table Test 04: ");  printf("%s", (test_pass = test4()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Hash Table Test 05: ");  printf("%s", (test_pass = test5()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+
     return 0;
 }
