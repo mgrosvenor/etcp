@@ -56,7 +56,7 @@ cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotId
     }
 
     const i64 slotCount = cq->slotCount;
-    const i64 idx = cq->_wrIdx + 1 < slotCount ? cq->_wrIdx + 1 : cq->_wrIdx + 1 - slotCount;
+    const i64 idx = cq->_wrIdx;
     cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
     if(slot->__state != cqSTFREE){
         return cqENOSLOT;
@@ -132,7 +132,7 @@ cqError_t cqReleaseSlotWr(cq_t* const cq, const i64 slotIdx)
     return cqENOERR;
 }
 
-cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io)
+cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io, i64* const idx_o)
 {
     if(cq == NULL || data == NULL || len_io == NULL){
         return cqNULLPARAM;
@@ -149,11 +149,13 @@ cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len
     const i64 len = *len_io;
     const i64 toCopy = min(len, slot->len);
     *len_io = toCopy;
+    *idx_o = idx;
     memcpy(slot->buff,data,toCopy);
 
     if(toCopy < len){
         return cqETRUNC;
     }
+
 
     return cqENOERR;
 }
@@ -224,7 +226,7 @@ cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotId
 
     const i64 slotCount = cq->slotCount;
 
-    const i64 idx = cq->_rdIdx + 1 < slotCount ? cq->_rdIdx + 1 : cq->_rdIdx + 1 - slotCount;
+    const i64 idx = cq->_rdIdx;
     cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
     if(slot->__state != cqSTREADY){
         return cqENOSLOT;

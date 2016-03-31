@@ -46,7 +46,7 @@ ht_t* htNew( uint64_t tableEntriesLog2);
  * @param value
  * @return
  */
-htError_t htAddNew(ht_t* const ht, const htKey_t* const key, const void* const value  );
+htError_t htAddNew(ht_t* const ht, const htKey_t* const key, void* value  );
 
 /**
  * Get a value from the table given the key

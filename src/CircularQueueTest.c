@@ -5,7 +5,7 @@
  *  Created:   24 Mar 2016
  *  File name: CircularQueueTest.c
  *  Description:
- *  <INSERT DESCRIPTION HERE> 
+ *  Some very basic sanity checks for the queue structure
  */
 
 #include <stdio.h>
@@ -16,7 +16,7 @@
 
 #include "CircularQueue.h"
 
-#define CQ_ASSERT(p) do { if(!(p)) { fprintf(stdout, "Error in %s: failed assertion \""#p"\" on line %u\n", __FUNCTION__, __LINE__); result = 0; } } while(0)
+#define CQ_ASSERT(p) do { if(!(p)) { fprintf(stdout, "Error in %s: failed assertion \""#p"\" on line %u\n", __FUNCTION__, __LINE__); result = 0; return result; } } while(0)
 
 //Basic test allocate and free, should pass the valgrind and addresssanitizer checks
 bool test1()
@@ -42,11 +42,11 @@ bool test2()
     CQ_ASSERT(err == cqENOERR);
     CQ_ASSERT(slot != NULL);
     CQ_ASSERT(idx == 0);
-    CQ_ASSERT(cq->wrIdx == 1);
+    CQ_ASSERT(cq->_wrIdx == 1);
 
     err = cqReleaseSlotWr(cq,idx);
     CQ_ASSERT(err == cqENOERR);
-    CQ_ASSERT(cq->wrIdx == 0);
+    CQ_ASSERT(cq->_wrIdx == 0);
 
     cqDelete(cq);
     return result;
@@ -68,7 +68,7 @@ bool test3()
             CQ_ASSERT(err == cqENOERR);
             CQ_ASSERT(slot != NULL);
             CQ_ASSERT(idx == i);
-            CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
+            CQ_ASSERT(cq->_wrIdx == i +1 || cq->_wrIdx == 0 );
         }
 
         cqSlot_t* slot = NULL;
@@ -77,13 +77,13 @@ bool test3()
         CQ_ASSERT(err == cqENOSLOT);
         CQ_ASSERT(slot == NULL);
         CQ_ASSERT(idx == -1);
-        CQ_ASSERT(cq->wrIdx == 0 );
+        CQ_ASSERT(cq->_wrIdx == 0 );
 
 
         for(int i = total - 1; i >= 0; i--){
             err = cqReleaseSlotWr(cq,i);
             CQ_ASSERT(err == cqENOERR);
-            CQ_ASSERT(cq->wrIdx == i );
+            CQ_ASSERT(cq->_wrIdx == i );
         }
     }
     cqDelete(cq);
@@ -102,9 +102,12 @@ bool test4()
     i64 len = datalen;
 
     for(int i = 0; i < total; i++){
-        err = cQPushNext(cq,(i8*)data,&len);
+        i64 idx = -1;
+        err = cqPushNext(cq,(i8*)data,&len,&idx);
         CQ_ASSERT(err == cqENOERR);
-        CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
+        CQ_ASSERT(cq->_wrIdx == i +1 || cq->_wrIdx == 0 );
+        err = cqCommitSlot(cq,idx,len);
+        CQ_ASSERT(err == cqENOERR);
     }
 
     cqSlot_t* slot = NULL;
@@ -113,7 +116,7 @@ bool test4()
     CQ_ASSERT(err == cqENOSLOT);
     CQ_ASSERT(slot == NULL);
     CQ_ASSERT(idx == -1);
-    CQ_ASSERT(cq->wrIdx == 0 );
+    CQ_ASSERT(cq->_wrIdx == 0 );
 
 
     for(int i = total - 1; i >= 0; i--){
@@ -137,9 +140,12 @@ bool test5()
     i64 len = datalen;
 
     for(int i = 0; i < total; i++){
-        err = cQPushNext(cq,(i8*)data,&len);
+        i64 idx = -1;
+        err = cqPushNext(cq,(i8*)data,&len,&idx);
         CQ_ASSERT(err == cqENOERR);
-        CQ_ASSERT(cq->wrIdx == i +1 || cq->wrIdx == 0 );
+        CQ_ASSERT(cq->_wrIdx == i +1 || cq->_wrIdx == 0 );
+        err = cqCommitSlot(cq,idx,len);
+        CQ_ASSERT(err == cqENOERR);
     }
 
     cqSlot_t* slot = NULL;
@@ -148,23 +154,22 @@ bool test5()
     CQ_ASSERT(err == cqENOSLOT);
     CQ_ASSERT(slot == NULL);
     CQ_ASSERT(idx == -1);
-    CQ_ASSERT(cq->wrIdx == 0 );
+    CQ_ASSERT(cq->_wrIdx == 0 );
 
 
     i8 readbuff[8];
     for(int i = 0; i < total; i++){
-        err = cqPullNext(cq,(i8*)readbuff,&len);
+        err = cqPullNext(cq,(i8*)readbuff,&len, &idx);
         CQ_ASSERT(err == cqENOERR);
-        CQ_ASSERT(cq->rdIdx == i +1 || cq->rdIdx == 0 );
+        CQ_ASSERT(cq->_rdIdx == i +1 || cq->_rdIdx == 0 );
     }
 
-    err = cqPullNext(cq,(i8*)readbuff,&len);
+    idx = -1;
+    err = cqPullNext(cq,(i8*)readbuff,&len,&idx);
     CQ_ASSERT(err == cqENOSLOT);
     CQ_ASSERT(slot == NULL);
     CQ_ASSERT(idx == -1);
-    CQ_ASSERT(cq->wrIdx == 0 );
-
-
+    CQ_ASSERT(cq->_wrIdx == 0 );
 
     cqDelete(cq);
     return result;
@@ -177,10 +182,10 @@ int main(int argc, char** argv)
     (void)argv;
 
     i64 test_pass = 0;
-    printf("CH Data Structures: Array Test 01: ");  printf("%s", (test_pass = test1()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
-    printf("CH Data Structures: Array Test 02: ");  printf("%s", (test_pass = test2()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
-    printf("CH Data Structures: Array Test 03: ");  printf("%s", (test_pass = test3()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
-    printf("CH Data Structures: Array Test 04: ");  printf("%s", (test_pass = test4()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
-    printf("CH Data Structures: Array Test 05: ");  printf("%s", (test_pass = test5()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Circular Queue Test 01: ");  printf("%s", (test_pass = test1()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Circular Queue Test 02: ");  printf("%s", (test_pass = test2()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Circular Queue Test 03: ");  printf("%s", (test_pass = test3()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Circular Queue Test 04: ");  printf("%s", (test_pass = test4()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
+    printf("ETCP Data Structures: Circular Queue Test 05: ");  printf("%s", (test_pass = test5()) ? "PASS\n" : "FAIL\n"); if(!test_pass) return 1;
     return 0;
 }

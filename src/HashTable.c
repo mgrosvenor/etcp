@@ -11,6 +11,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <assert.h>
 
 #include "types.h"
 #include "utils.h"
@@ -66,10 +69,10 @@ ht_t* htNew( uint64_t tableEntriesLog2)
  * @param keySize   The size of the key in bytes
  * @return          A value of no more than (1 << ht->tableEntriesLog2) in size
  */
-static inline i64 getIdx(const ht_t* const ht, const htKey_t* const key)
+static inline uint64_t getIdx(const ht_t* const ht, const htKey_t* const key)
 {
-    i64 hash64 = spooky_Hash64(key, sizeof(htKey_t), 0xB16B00B1E5FULL);
-    return (hash64 * 11400714819323198549UL) >> (64 - (ht->tableEntriesLog2 + 1));
+    uint64_t hash64 = spooky_Hash64(key, sizeof(htKey_t), 0xB16B00B1E5FULL);
+    return (hash64 * 11400714819323198549UL) >> (64 - (ht->tableEntriesLog2));
 }
 
 /**
@@ -81,13 +84,15 @@ static inline i64 getIdx(const ht_t* const ht, const htKey_t* const key)
  * @param value
  * @return
  */
-htError_t htAddNew(ht_t* const ht, const htKey_t* const key, const void* const value  )
+htError_t htAddNew(ht_t* const ht, const htKey_t* const key, void* value  )
 {
     //Convert the key to an index
     const i64 idx = getIdx(ht, key);
+    assert(idx >= 0);
+    assert(idx <= (i64)ht->tableEntries);
 
     //Jump to the index
-    htEntry_t* const entry = ht->table[idx];
+    htEntry_t* entry = ht->table[idx];
 
     //Traverse the linked list
     if_eqlikely(entry == NULL){
@@ -98,22 +103,22 @@ htError_t htAddNew(ht_t* const ht, const htKey_t* const key, const void* const v
         }
 
         ht->table[idx]       = newEntry;
-        ht->table[idx].key   = *key;
-        ht->table[idx].value = value;
+        ht->table[idx]->key   = *key;
+        ht->table[idx]->value = value;
         return htENOEROR;
 
     }
 
     //The linked is is not empty, check that the key is not already in it
-    if_unlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
+    if_unlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
         //The key is already in the table!
         return htEALREADY;
     }
 
     //Keep checking and traversing
     for(; entry->next; entry = entry->next){
-        if_unlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
-            return etcpEALREADY;
+        if_unlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
+            return htEALREADY;
         }
     }
 
@@ -124,8 +129,8 @@ htError_t htAddNew(ht_t* const ht, const htKey_t* const key, const void* const v
     }
 
     entry->next       = newEntry;
-    entry->next.key   = *key;
-    entry->next.value = value;
+    entry->next->key   = *key;
+    entry->next->value = value;
     return htENOEROR;
 }
 
@@ -140,9 +145,11 @@ htError_t htGet(ht_t* const ht, const htKey_t* const key, void** const value_o  
 {
     //Convert the key to an index
     const i64 idx = getIdx(ht, key);
+    assert(idx >= 0);
+    assert(idx <= (i64)ht->tableEntries);
 
     //Jump to the index
-    htEntry_t* const entry = ht.table[idx];
+    htEntry_t* entry = ht->table[idx];
 
     //Traverse the linked list
     if_unlikely(entry == NULL){
@@ -151,20 +158,21 @@ htError_t htGet(ht_t* const ht, const htKey_t* const key, void** const value_o  
     }
 
     //The linked is is not empty, check that the key is not already in it
-    if_eqlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
+    if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
         *value_o = entry->value;
         return htENOEROR;
     }
 
     //Keep checking and traversing
     for(; entry->next; entry = entry->next){
-        if_eqlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
+        if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
             *value_o = entry->value;
             return htENOEROR;
         }
     }
 
     //Reached the end of the linked list without finding the key.
+    printf("Not found entry!\n");
     *value_o = NULL;
     return htENOTFOUND;
 }
@@ -179,9 +187,12 @@ void htRem(ht_t* const ht, const htKey_t* const key )
 {
     //Convert the key to an index
     const i64 idx = getIdx(ht, key);
+    assert(idx >= 0);
+    assert(idx <= (i64)ht->tableEntries);
+
 
     //Jump to the index
-    htEntry_t* const entry = ht.table[idx];
+    htEntry_t* entry = ht->table[idx];
 
     //Traverse the linked list
     if_unlikely(entry == NULL){
@@ -189,8 +200,8 @@ void htRem(ht_t* const ht, const htKey_t* const key )
     }
 
     //The linked is is not empty, check that the key is not already in it
-    if_eqlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
-        ht.table[idx] = entry->next; //Reassign the table entry
+    if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
+        ht->table[idx] = entry->next; //Reassign the table entry
         free(entry); //Free the old entry
         return;
     }
@@ -198,7 +209,7 @@ void htRem(ht_t* const ht, const htKey_t* const key )
     //Keep checking and traversing
     htEntry_t* prev = entry;
     for(; entry->next; entry = entry->next){
-        if_eqlikely(memcmp(key, entry->key, sizeof(htKey_t)) == 0){
+        if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
             prev->next = entry->next; //Reassign the links
             free(entry); //Free the old entry
             return;
@@ -215,16 +226,16 @@ void htRem(ht_t* const ht, const htKey_t* const key )
 void htDelete(ht_t* const ht)
 {
     //Look at each table entry
-    for(i64 i = 0; i < ht->tableEntries; i++){
+    for(uint64_t i = 0; i < ht->tableEntries; i++){
         //Free each linked list entry
-        htEntry_t* const entry = ht->table[i];
+        htEntry_t* entry = ht->table[i];
         if_eqlikely(entry == NULL){
             continue; //Nothing more to do here
         }
 
 
         //Free all list elements
-        for(htEntry_t* const entryNext = entry->next; entry != NULL; ){
+        for(htEntry_t* entryNext = entry->next; entry != NULL; ){
             entryNext = entry->next;
             free(entry);
             entry = entryNext;

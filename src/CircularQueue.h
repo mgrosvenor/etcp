@@ -106,9 +106,10 @@ cqError_t cqReleaseSlotWr(cq_t* const cq, i64 const slotIdx);
  * @param data  Data that you wish to have copied into the slot
  * @param len   Length of the data, this must be less than slot size. If it is too big, ETRUNC will be returned and len will
  *              will be set to the number of bytes actually copied
+ * @param idx_o The index of this item to be used for committing later
  * @return
  */
-cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len);
+cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io, i64* const idx_o);
 
 /**
  * @brief       Equivalent to GetNextIdx and memcopy
