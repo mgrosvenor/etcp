@@ -35,6 +35,7 @@ typedef enum {
     etcpETRYAGAIN,    //There's nothing to see here, come back again
     etcpWRONGSOCK,    //Operation on the wrong socket type
     etcpEFATAL,       //Something irrecoverably bad happened! Stop the world!
+    etcpEREJCONN,     //Rejecting this connection
 } etcpError_t;
 
 

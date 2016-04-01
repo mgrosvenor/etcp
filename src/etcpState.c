@@ -20,7 +20,7 @@ void connHTDelete(const htKey_t* const key, void* const value)
 }
 
 
-void srcConnsDelete(etcpSrcConns_t* const srcConns){
+void srcsMapDelete(etcpSrcsMap_t* const srcConns){
     if_unlikely(!srcConns){
         return;
     }
@@ -29,21 +29,21 @@ void srcConnsDelete(etcpSrcConns_t* const srcConns){
         cqDelete(srcConns->listenQ);
     }
 
-    if_likely(srcConns->srcTable != NULL){
-        htDelete(srcConns->srcTable,connHTDelete);
+    if_likely(srcConns->table != NULL){
+        htDelete(srcConns->table,connHTDelete);
     }
 }
 
 
-etcpSrcConns_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
+etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
 {
-    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const )calloc(1,sizeof(etcpSrcConns_t));
+    etcpSrcsMap_t* const srcConns = (etcpSrcsMap_t* const )calloc(1,sizeof(etcpSrcsMap_t));
     if_unlikely(!srcConns){
         return NULL;
     }
 
-    srcConns->srcTable = htNew(SRC_TAB_MAX_LOG2);
-    if_likely(!srcConns->srcTable){
+    srcConns->table = htNew(SRC_TAB_MAX_LOG2);
+    if_likely(!srcConns->table){
         srcConnsDelete(srcConns);
         return NULL;
     }
@@ -59,7 +59,7 @@ etcpSrcConns_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t lis
 void srcConnsHTDelete(const htKey_t* const key, void* const value)
 {
     DBG("HT deleting src cons for dstA=%li dstP=%li\n", key->keyHi, key->keyLo);
-    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const)value;
+    etcpSrcsMap_t* const srcConns = (etcpSrcsMap_t* const)value;
     srcConnsDelete(srcConns);
 }
 

@@ -35,7 +35,7 @@ typedef struct etcpSocket_s
 
     socketType_t type;
     union{
-        etcpSrcConns_t* la;
+        etcpSrcsMap_t* la;
         etcpConn_t* conn;
     };
 } etcpSocket_t;
@@ -59,50 +59,52 @@ etcpSocket_t* etcpSocketNew(etcpState_t* const etcpState)
 //Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
 etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
 {
-
     if(sock->type != ETCPSOCK_UK){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
         return etcpWRONGSOCK;
     }
 
     etcpState_t* const state = sock->etcpState;
-    ht_t* const dstTable = state->dstTable;
+    ht_t* const dstMap = state->dstMap;
     htKey_t dstKey = {.keyHi = srcAddr, .keyLo = srcPort }; //Flip the SRC/DST around so they match the listener side
-    void* srcConnsP = NULL;
-    htError_t htErr = htGet(dstTable,&dstKey,&srcConnsP);
+    etcpSrcsMap_t* srcsMap = NULL;
+
+    //First check if this destination is in our destinations map, if not, add a new sources map, based on this destination
+    htError_t htErr = htGet(dstMap,&dstKey,(void**)&srcsMap);
     if(htErr == htENOTFOUND){
-        etcpSrcConns_t* const srcConns = srcConnsNew(0,0); //Listen window/buff size = 0 because we are not listening.
-        if_unlikely(!srcConns){
+        srcsMap = srcConnsNew(0,0); //Listen window/buff size = 0 because we are not listening.
+        if_unlikely(!srcsMap){
             WARN("Ran out of memory making new sources connections container\n");
             return etcpENOMEM;
         }
 
-        htErr = htAddNew(dstTable,&dstKey,srcConns);
+        htErr = htAddNew(dstMap,&dstKey,srcsMap);
         if(htErr != htENOEROR){
             ERR("Failed on hash table with error=%li\n", htErr);
             return etcpENOTCONN;
         }
-        srcConnsP = srcConns;
-    }
-    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const)(srcConnsP);
-
-    //By this stage we should have a valid srcConns structure, look into it id the destination address is already used
-    ht_t* const srcTable = srcConns->srcTable;
-    htKey_t srcKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side
-    void* connP = NULL;
-    htErr = htGet(srcTable,&srcKey,&connP);
-    if_unlikely(htErr == htEALREADY){
-        WARN("Trying to setup an exisiting connection\n");
-        //We're already connected using the same source and destination ports!
-        return etcpEALREADY;
     }
 
+    //We have a sources map for this destination. Now make a new connection
     sock->type = ETCPSOCK_SR;
     sock->conn = etcpConnNew(windowSize,buffSize,srcAddr,srcPort, dstAddr,dstPort);
     if_unlikely(sock->conn == NULL){
         WARN("Ran out of memory trying to make a new connection\n");
         return etcpENOMEM;
     }
+
+    //Now add the connection into the sources map
+    ht_t* const srcsTable = srcsMap->table;
+    htKey_t srcKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side    ;
+    htErr = htAddNew(srcsTable,&srcKey,sock->conn);
+    if_unlikely(htErr == htENOEROR){
+        WARN("Trying to setup an exisiting connection\n");
+        //We're already connected using the same source and destination ports!
+        //Clean up the mess
+        etcpConnDelete(sock->conn);
+        return etcpEALREADY;
+    }
+
 
     return etcpENOERR;
 }
@@ -116,24 +118,24 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const 
         return etcpWRONGSOCK;
     }
 
-    etcpSrcConns_t* const srcConns = srcConnsNew(windowSize,buffSize);
-    if_unlikely(!srcConns){
+    etcpSrcsMap_t* const srcsMap = srcConnsNew(windowSize,buffSize);
+    if_unlikely(!srcsMap){
         WARN("Ran out of memory making new sources connections container\n");
         return etcpENOMEM;
     }
 
     etcpState_t* const state = sock->etcpState;
-    ht_t* const dstTable = state->dstTable;
+    ht_t* const dstMap = state->dstMap;
     htKey_t dstKey = {.keyHi = dstAddr, .keyLo = dstPort };
-    htError_t htErr = htAddNew(dstTable,&dstKey,srcConns);
-    if(htErr != htEALREADY){
+    htError_t htErr = htAddNew(dstMap,&dstKey,srcsMap);
+    if(htErr == htEALREADY){
         ERR("Trying to bind to an address that is already in use address=%li, port=%li\n", dstAddr, dstPort);
-        //TODO could add a reuse address idea here, but that could get messy. Skip for now.
+        //TODO could add a SO_REUSEADDR idea here, but that could get messy. Skip for now.
         return etcpEALREADY;
     }
 
     sock->type = ETCPSOCK_LA;
-    sock->la   = srcConns;
+    sock->la   = srcsMap;
 
     return etcpENOERR;
 }

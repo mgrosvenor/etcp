@@ -134,6 +134,8 @@ htError_t htAddNew(ht_t* const ht, const htKey_t* const key, void* value  )
     return htENOEROR;
 }
 
+
+
 /**
  * Get a value from the table given the key
  * @param ht
@@ -246,5 +248,24 @@ void htDelete(ht_t* const ht, deleteCb_f deleteCb)
     free(ht->table);
 
     free(ht);
+}
+
+
+
+char* errors[htECOUNT] = {
+    "Success! No error",
+    "No memory available",
+    "Key is already in the table",
+    "Key was not found in table",
+};
+
+//Convert a cqError number into a text description
+const char* htError2Str(const htError_t err)
+{
+    if(err >= htECOUNT){
+        return "Bad error number";
+    }
+
+    return errors[err];
 }
 

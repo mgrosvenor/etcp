@@ -334,14 +334,14 @@ void cqDelete(cq_t* const cq)
 
 
 char* errors[cqECOUNT] = {
-    "Success! No error",
-    "No memory available",
-    "No slots available",
-    "Payload was truncated",
-    "Value is out of range",
-    "Wrong slot selected",
-    "PANIC! INTERNAL MEMROY OVERWRITTEN",
-    "Null paramter supplied"
+    "Success! No error",                    //cqENOERR
+    "No memory available",                  //cqENOMEM
+    "No slots available",                   //cqENOSLOT
+    "Payload was truncated",                //cqETRUNC
+    "Value is out of range",                //cqERANGE
+    "Wrong slot selected",                  //cqEWRONGSLOT
+    "PANIC! INTERNAL MEMROY OVERWRITTEN",   //cqEPANIC
+    "Null paramter supplied"                //cqNULLPARAM
 
 };
 

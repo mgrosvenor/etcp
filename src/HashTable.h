@@ -23,10 +23,11 @@ typedef struct __attribute__((packed)) htKey_s {
 typedef struct ht_s ht_t;
 
 typedef enum {
-    htENOEROR,   //Things went well!
+    htENOEROR = 0,   //Things went well!
     htENOMEM,    //Not enough memory to do this
     htEALREADY,  //This key already exists
     htENOTFOUND, //The key does not exist
+    htECOUNT     //Must come last
 } htError_t;
 
 
@@ -64,6 +65,8 @@ htError_t htGet(ht_t* const ht, const htKey_t* const key, void** const value_o  
  */
 void htRem(ht_t* const ht, const htKey_t* const key );
 
+
+const char* htError2Str(const htError_t err);
 
 /**
  * Free all resources associated with the hashtable

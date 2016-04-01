@@ -53,13 +53,12 @@ typedef enum {
     ETCP_ERR = 0x00, //Not a valid message, something wrong
 
     //Uses the the data message packet format
-    //ETCP_CON = 0x01, //The first packet on this connection
     //ETCP_FIN = 0x02, //Is the last packet on this connection
     ETCP_DAT = 0x03, //Just another data packet
 
     //Uses the acknowledgement packet format
     ETCP_ACK = 0x04, //Contains acknowledgement fields
-    ETCP_DEN = 0x05, //Connection denied
+
 } etcpMsgType_t;
 
 

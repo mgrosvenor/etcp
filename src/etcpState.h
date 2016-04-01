@@ -35,12 +35,12 @@ typedef struct etcpState_s {
     ethHwTx_f ethHwTx;
     ethHwRx_f ethHwRx;
 
-    ht_t* dstTable; //All unique dst address/port combinations
+    ht_t* dstMap; //All unique dst address/port combinations
 } etcpState_t;
 
 
 //This structure contains all unique source address/port combination connections for a given destination address/port combination.
-typedef struct etcpSrcConns_s etcpSrcConns_t;
+typedef struct etcpSrcConns_s etcpSrcsMap_t;
 typedef struct etcpSrcConns_s {
 
     //These are for new connections that happen when we're listening
@@ -49,12 +49,12 @@ typedef struct etcpSrcConns_s {
 
     cq_t* listenQ; //Queue containing connections that have not yet been accepted
 
-    ht_t* srcTable; //All unique src address/port combinations
+    ht_t* table; //All unique src address/port combinations
 
-} etcpSrcConns_t;
+} etcpSrcsMap_t;
 
 
 etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx);
-etcpSrcConns_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
+etcpSrcsMap_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
 
 #endif /* SRC_ETCPSTATE_H_ */
