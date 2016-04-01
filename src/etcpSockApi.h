@@ -12,15 +12,9 @@
 
 #include "types.h"
 
-#define DST_TAB_MAX_LOG2 (17) //2^17 = 128K dst Adrr/Port pairs, 1MB in memory
-#define SRC_TAB_MAX_LOG2 (10) //210  = 1K src Adrr/Port pairs, 8kB in memory
-#define MAXSEGS 1024
-#define MAXSEGSIZE (2048 - sizeof(etcpConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
-
-
-//Forward declaration to keep internals private
-struct etcpSocket_s;
+//Forward declarations to keep internals private
 typedef struct etcpSocket_s etcpSocket_t;
+typedef struct etcpState_s etcpState_t;
 
 //Make a new "socket" for either listening on or writing to
 //A socket is a generic container that holds either a pair of connection read/write queues, or an inbound connection queue

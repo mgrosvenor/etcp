@@ -30,6 +30,7 @@
 #include "utils.h"
 #include "etcp.h"
 
+#include "etcpState.h"
 
 //typedef struct  __attribute__((packed)) {
 //    i32 srcPort;
@@ -47,7 +48,6 @@ typedef struct  __attribute__((packed)){
 
 
 typedef struct etcpConn_s etcpConn_t;
-typedef struct etcpState_s etcpState_t;
 
 struct etcpConn_s {
 
@@ -132,7 +132,7 @@ static inline etcpError_t etcpOnRxConn(const etcpFlowId_t* const flowId,  etcpCo
 }
 
 
-static inline etcpError_t etcpOnRxDat(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
+static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new data message with type = 0x%016x\n", head->type);
 
@@ -153,6 +153,8 @@ static inline etcpError_t etcpOnRxDat(const etcpMsgHead_t* head, const i64 len, 
     DBG("Working on new data message with len = 0x%016x\n", datHdr->datLen);
 
     //Find the connection for this packet
+
+
     etcpConn_t* conn = etcpConnGet(flowId);
     if_unlikely(!conn){
         WARN("Error data packet for invalid connection. Ignoring.\n");
@@ -300,7 +302,7 @@ static inline  etcpError_t etcpOnRxAck(const etcpMsgHead_t* head, const i64 len,
 
 
 
-static inline  etcpError_t etcpOnRxPacket( const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxPacket(etcpState_t* const state, const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
 {
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(etcpMsgHead_t);
@@ -328,10 +330,10 @@ static inline  etcpError_t etcpOnRxPacket( const void* packet, const i64 len, i6
     switch(head->fulltype){
 //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
         case ETCP_V1_FULLHEAD(ETCP_DAT):
-            return etcpOnRxDat(head, len, &flowId);
+            return etcpOnRxDat(state, head, len, &flowId);
 
         case ETCP_V1_FULLHEAD(ETCP_ACK):
-            return etcpOnRxAck(head, len, &flowId);
+            return etcpOnRxAck(state, head, len, &flowId);
 
         default:
             WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
@@ -354,7 +356,7 @@ typedef struct __attribute__((packed)){
 //The expected transport for ETCP is Ethernet, but really it doesn't care. PCIE/IPV4/6 could work as well.
 //This function codes the assumes an Ethernet frame, supplied with a frame check sequence to the ETCP processor.
 //It expects that an out-of-band hardware timestamp is also passed in.
-static inline  etcpError_t etcpOnRxEthernetFrame( const void* const frame, const i64 len, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxEthernetFrame(etcpState_t* const state, const void* const frame, const i64 len, i64 hwRxTimeNs)
 {
     const i64 minSizeEHdr = sizeof(ETH_HLEN + ETH_FCS_LEN);
        if_unlikely(len < minSizeEHdr){
@@ -372,14 +374,14 @@ static inline  etcpError_t etcpOnRxEthernetFrame( const void* const frame, const
        i64 etcpPacketLen      = len - ETH_HLEN - ETH_FCS_LEN;
 
        if_likely(proto == ETH_P_ECTP ){
-           return etcpOnRxPacket(packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
+           return etcpOnRxPacket(state, packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
        }
 
        //This is a VLAN tagged packet we can handle these too
        if_likely(proto == ETH_P_8021Q){
            packet        = ((uint8_t*)packet + sizeof(eth8021qTCI_t));
            etcpPacketLen = len - sizeof(eth8021qTCI_t);
-           return etcpOnRxPacket(packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
+           return etcpOnRxPacket(state, packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
        }
 
        WARN("Unknown EtherType 0x%04x\n", proto);
@@ -593,14 +595,14 @@ static inline etcpError_t generateAcks(etcpConn_t* const conn)
 //Traverse the send queues and check what can be sent.
 //First look over the ack send queue, we send ACK packets as a priority. If the ackQueue is empty, then look over the send
 //queue and check if anything has timed out.
-etcpError_t doEtcpNetTx(etcpConn_t* const conn)
+etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
 {
     //Sending the ack's is simple, just send and forget;
     cqSlot_t* slot = NULL;
     i64 slotIdx;
     while(cqGetNextRd(conn->akcq,&slot,&slotIdx) != cqENOSLOT){
         i64 hwTxTimeNs = 0;
-        conn->ethHwTx(conn->ethHwState,slot->buff, slot->len, &hwTxTimeNs);
+        state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs);
         cqError_t err = cqReleaseSlotRd(conn->akcq,slotIdx);
         if_unlikely(err != cqENOERR){
             ERR("CQ had an error: %s\n", cqError2Str(err));
@@ -639,7 +641,7 @@ etcpError_t doEtcpNetTx(etcpConn_t* const conn)
 
         if(timeNowNs > transTimeNs){
             i64 hwTxTimeNs = 0;
-            if(conn->ethHwTx(conn->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
+            if_unlikely(state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
                 return etcpETRYAGAIN;
             }
             head->ts.hwTxTimeNs = hwTxTimeNs;
@@ -654,16 +656,14 @@ etcpError_t doEtcpNetTx(etcpConn_t* const conn)
 
 
 
-#define MAX_FRAME (2 * 1024)
-void doEtcpNetRx(etcpConn_t* const conn)
+void doEtcpNetRx(etcpState_t* const state)
 {
 
-    const etcpState_t* const etcpState = conn->state;
     i8 frameBuff[MAX_FRAME] = {0};
-    i64 hwRxTimeNs = 0;
-    i64 rxLen = etcpState->ethHwRx(etcpState->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs);
-    for(; rxLen > 0; rxLen = etcpState->ethHwRx(etcpState->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs)){
-        etcpError_t err = etcpOnRxEthernetFrame(frameBuff,rxLen, hwRxTimeNs);
+    uint64_t hwRxTimeNs = 0;
+    i64 rxLen = state->ethHwRx(state->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs);
+    for(; rxLen > 0; rxLen = state->ethHwRx(state->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs)){
+        etcpError_t err = etcpOnRxEthernetFrame(state, frameBuff,rxLen, hwRxTimeNs);
         if_unlikely(err == etcpETRYAGAIN){
             WARN("Ring is full\n");
             break;

@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2016, All rights reserved.
+ * See LICENSE.txt for full details. 
+ * 
+ *  Created:   1 Apr 2016
+ *  File name: etcpState.c
+ *  Description:
+ *  <INSERT DESCRIPTION HERE> 
+ */
+
+#include "etcpState.h"
+#include "utils.h"
+#include "debug.h"
+
+void connHTDelete(const htKey_t* const key, void* const value)
+{
+    DBG("Deleting conn for srcA=%li srcP=%li\n", key->keyHi, key->keyLo);
+    etcpConn_t* const conn = (etcpConn_t* const)(value);
+    etcpConnDelete(conn);
+}
+
+
+void srcConnsDelete(etcpSrcConns_t* const srcConns){
+    if_unlikely(!srcConns){
+        return;
+    }
+
+    if_likely(srcConns->listenQ != NULL){
+        cqDelete(srcConns->listenQ);
+    }
+
+    if_likely(srcConns->srcTable != NULL){
+        htDelete(srcConns->srcTable,connHTDelete);
+    }
+}
+
+
+etcpSrcConns_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
+{
+    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const )calloc(1,sizeof(etcpSrcConns_t));
+    if_unlikely(!srcConns){
+        return NULL;
+    }
+
+    srcConns->srcTable = htNew(SRC_TAB_MAX_LOG2);
+    if_likely(!srcConns->srcTable){
+        srcConnsDelete(srcConns);
+        return NULL;
+    }
+
+    srcConns->listenWindowSize = listenWindowSize;
+    srcConns->listenBuffSize   = listenBuffSize;
+
+    return srcConns;
+
+}
+
+
+void srcConnsHTDelete(const htKey_t* const key, void* const value)
+{
+    DBG("HT deleting src cons for dstA=%li dstP=%li\n", key->keyHi, key->keyLo);
+    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const)value;
+    srcConnsDelete(srcConns);
+}
+
+
+void deleteEtcpState(etcpState_t* etcpState)
+{
+    if_unlikely(!etcpState){
+        return;
+    }
+
+    if_likely(etcpState->dstTable != NULL){
+        htDelete(etcpState->dstTable,srcConnsHTDelete);
+    }
+
+    free(etcpState);
+}
+
+
+etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx)
+{
+    etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
+    if_unlikely(!etcpState){
+        return NULL;
+    }
+
+    etcpState->ethHwRx    = ethHwRx;
+    etcpState->ethHwTx    = ethHwTx;
+    etcpState->ethHwState = ethHwState;
+
+
+    etcpState->dstTable = htNew(DST_TAB_MAX_LOG2);
+    if_unlikely(!etcpState->dstTable){
+        deleteEtcpState(etcpState);
+        return NULL;
+    }
+
+    return etcpState;
+}

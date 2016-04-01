@@ -17,20 +17,8 @@
 #include "HashTable.h"
 #include "debug.h"
 #include "utils.h"
+#include "etcpState.h"
 
-//This structure contains all unique source address/port combination connections for a given destination address/port combination.
-typedef struct etcpSrcConns_s etcpSrcConns_t;
-typedef struct etcpSrcConns_s {
-
-    //These are for new connections that happen when we're listening
-    uint32_t listenWindowSize;
-    uint32_t listenBuffSize;
-
-    cq_t* listenQ; //Queue containing connections that have not yet been accepted
-
-    ht_t* srcTable; //All unique src address/port combinations
-
-} etcpSrcConns_t;
 
 
 typedef enum {
@@ -52,106 +40,6 @@ typedef struct etcpSocket_s
     };
 } etcpSocket_t;
 
-
-
-struct etcpState_s {
-
-    void* ethHwState;
-    ethHwTx_f ethHwTx;
-    ethHwRx_f ethHwRx;
-
-    ht_t* dstTable; //All unique dst address/port combinations
-};
-
-
-
-
-void connHTDelete(const htKey_t* const key, void* const value)
-{
-    DBG("Deleting conn for srcA=%li srcP=%li\n", key->keyHi, key->keyLo);
-    etcpConn_t* const conn = (etcpConn_t* const)(value);
-    etcpConnDelete(conn);
-}
-
-
-void srcConnsDelete(etcpSrcConns_t* const srcConns){
-    if_unlikely(!srcConns){
-        return;
-    }
-
-    if_likely(srcConns->listenQ != NULL){
-        cqDelete(srcConns->listenQ);
-    }
-
-    if_likely(srcConns->srcTable != NULL){
-        htDelete(srcConns->srcTable,connHTDelete);
-    }
-}
-
-
-etcpSrcConns_t* srcConnsNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
-{
-    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const )calloc(1,sizeof(etcpSrcConns_t));
-    if_unlikely(!srcConns){
-        return NULL;
-    }
-
-    srcConns->srcTable = htNew(SRC_TAB_MAX_LOG2);
-    if_likely(!srcConns->srcTable){
-        srcConnsDelete(srcConns);
-        return NULL;
-    }
-
-    srcConns->listenWindowSize = listenWindowSize;
-    srcConns->listenBuffSize   = listenBuffSize;
-
-    return srcConns;
-
-}
-
-
-void srcConnsHTDelete(const htKey_t* const key, void* const value)
-{
-    DBG("HT deleting src cons for dstA=%li dstP=%li\n", key->keyHi, key->keyLo);
-    etcpSrcConns_t* const srcConns = (etcpSrcConns_t* const)value;
-    srcConnsDelete(srcConns);
-}
-
-
-void deleteEtcpState(etcpState_t* etcpState)
-{
-    if_unlikely(!etcpState){
-        return;
-    }
-
-    if_likely(etcpState->dstTable != NULL){
-        htDelete(etcpState->dstTable,srcConnsHTDelete);
-    }
-
-    free(etcpState);
-}
-
-
-etcpState_t* newEtcpState(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx)
-{
-    etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
-    if_unlikely(!etcpState){
-        return NULL;
-    }
-
-    etcpState->ethHwRx    = ethHwRx;
-    etcpState->ethHwTx    = ethHwTx;
-    etcpState->ethHwState = ethHwState;
-
-
-    etcpState->dstTable = htNew(DST_TAB_MAX_LOG2);
-    if_unlikely(!etcpState->dstTable){
-        deleteEtcpState(etcpState);
-        return NULL;
-    }
-
-    return etcpState;
-}
 
 
 //Make a new "socket" for either listening on or writing to
@@ -298,6 +186,15 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
         DBG("Unexpected error on cq %s\n", cqError2Str(err));
         return etcpECQERR;
     }
+
+//    //Move the connection out of the listen queue and into the fast path -- this should happen at connection startup
+//    ht_t* const srcTable = listenSock->la->srcTable;
+//    const htKey_t srcKey = {.keyHi = conn->flowId.srcAddr, .keyLo = conn->flowId.srcPort };
+//    htError_t htErr = htAddNew(srcTable,&srcKey,conn);
+//    if(htErr == htEALREADY){
+//        ERR("This connection is already connected\n");
+//        return etcpEALREADY;
+//    }
 
     //By this point we have a valid value in conn. See if we can make a new send/receive socket for it
     etcpSocket_t* acceptSock = etcpSocketNew(listenSock->etcpState);
