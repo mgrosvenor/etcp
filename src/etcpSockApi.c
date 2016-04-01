@@ -72,7 +72,7 @@ etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, con
     //First check if this destination is in our destinations map, if not, add a new sources map, based on this destination
     htError_t htErr = htGet(dstMap,&dstKey,(void**)&srcsMap);
     if(htErr == htENOTFOUND){
-        srcsMap = srcConnsNew(0,0); //Listen window/buff size = 0 because we are not listening.
+        srcsMap = srcsMapNew(0,0); //Listen window/buff size = 0 because we are not listening.
         if_unlikely(!srcsMap){
             WARN("Ran out of memory making new sources connections container\n");
             return etcpENOMEM;
@@ -118,7 +118,7 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const 
         return etcpWRONGSOCK;
     }
 
-    etcpSrcsMap_t* const srcsMap = srcConnsNew(windowSize,buffSize);
+    etcpSrcsMap_t* const srcsMap = srcsMapNew(windowSize,buffSize);
     if_unlikely(!srcsMap){
         WARN("Ran out of memory making new sources connections container\n");
         return etcpENOMEM;

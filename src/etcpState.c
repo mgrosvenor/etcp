@@ -8,7 +8,11 @@
  *  <INSERT DESCRIPTION HERE> 
  */
 
+#include <stdlib.h>
+#include <stddef.h>
+
 #include "etcpState.h"
+#include "etcpConn.h"
 #include "utils.h"
 #include "debug.h"
 
@@ -44,7 +48,7 @@ etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t liste
 
     srcConns->table = htNew(SRC_TAB_MAX_LOG2);
     if_likely(!srcConns->table){
-        srcConnsDelete(srcConns);
+        srcsMapDelete(srcConns);
         return NULL;
     }
 
@@ -60,7 +64,7 @@ void srcConnsHTDelete(const htKey_t* const key, void* const value)
 {
     DBG("HT deleting src cons for dstA=%li dstP=%li\n", key->keyHi, key->keyLo);
     etcpSrcsMap_t* const srcConns = (etcpSrcsMap_t* const)value;
-    srcConnsDelete(srcConns);
+    srcsMapDelete(srcConns);
 }
 
 
@@ -70,8 +74,8 @@ void deleteEtcpState(etcpState_t* etcpState)
         return;
     }
 
-    if_likely(etcpState->dstTable != NULL){
-        htDelete(etcpState->dstTable,srcConnsHTDelete);
+    if_likely(etcpState->dstMap != NULL){
+        htDelete(etcpState->dstMap,srcConnsHTDelete);
     }
 
     free(etcpState);
@@ -90,8 +94,8 @@ etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const
     etcpState->ethHwState = ethHwState;
 
 
-    etcpState->dstTable = htNew(DST_TAB_MAX_LOG2);
-    if_unlikely(!etcpState->dstTable){
+    etcpState->dstMap = htNew(DST_TAB_MAX_LOG2);
+    if_unlikely(!etcpState->dstMap){
         deleteEtcpState(etcpState);
         return NULL;
     }

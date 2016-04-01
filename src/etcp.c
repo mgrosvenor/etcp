@@ -32,86 +32,6 @@
 
 #include "etcpState.h"
 
-//typedef struct  __attribute__((packed)) {
-//    i32 srcPort;
-//    i32 dstPort;
-//    i64 srcAddr;
-//    i64 dstAddr;
-//} etcpFlowIdConnect_t;
-
-typedef struct  __attribute__((packed)){
-    i32 dstPort;
-    i32 srcPort;
-    i64 dstAddr;
-    i64 srcAddr;
-} etcpFlowId_t;
-
-
-typedef struct etcpConn_s etcpConn_t;
-
-struct etcpConn_s {
-
-    etcpFlowId_t flowId;
-
-    etcpState_t* state; //For working back to the global state
-
-    cq_t* rxcq; //Queue for incoming packets
-    cq_t* txcq; //Queue for outgoing packets
-    i64 lastTx;
-    cq_t* akcq; //Queue for outgoing acknowledgement packets
-
-    i64 seqAck; //The current acknowledge sequence number
-    i64 seqSnd; //The current send sequence number
-
-    i64 retransTimeOut; //How long to wait before attempting a retransmit
-
-    //XXX HACKS BELOW!
-    int16_t vlan; //XXX HACK - this should be in some nice ethernet place, not here.
-    uint8_t priority; //XXX HACK - this should be in some nice ethernet place, not here
-
-};
-
-
-
-void etcpConnDelete(etcpConn_t* const conn)
-{
-    if_unlikely(!conn){ return; }
-
-    if_likely(conn->txcq != NULL){ cqDelete(conn->txcq); }
-    if_likely(conn->rxcq != NULL){ cqDelete(conn->rxcq); }
-
-    free(conn);
-
-}
-
-
-
-etcpConn_t* etcpConnNew(const i64 windowSize, const i32 buffSize, const uint32_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
-{
-    etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
-    if_unlikely(!conn){ return NULL; }
-
-    conn->rxcq = cqNew(buffSize,windowSize);
-    if_unlikely(conn->rxcq == NULL){
-        etcpConnDelete(conn);
-        return NULL;
-    }
-
-    conn->txcq = cqNew(buffSize,windowSize);
-    if_unlikely(conn->txcq == NULL){
-        etcpConnDelete(conn);
-        return NULL;
-    }
-
-    conn->flowId.srcAddr = srcAddr;
-    conn->flowId.srcPort = srcPort;
-    conn->flowId.dstAddr = dstAddr;
-    conn->flowId.dstPort = dstPort;
-
-    return conn;
-}
-
-
 static inline etcpError_t addNewConn(etcpSrcsMap_t* const srcsMap, const etcpFlowId_t* const flowId,  etcpConn_t** const conn_o )
 {
     //The connection has not been established with this source
@@ -673,7 +593,7 @@ etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
     cqSlot_t* slot = NULL;
     i64 slotIdx;
     while(cqGetNextRd(conn->akcq,&slot,&slotIdx) != cqENOSLOT){
-        i64 hwTxTimeNs = 0;
+        uint64_t hwTxTimeNs = 0;
         state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs);
         cqError_t err = cqReleaseSlotRd(conn->akcq,slotIdx);
         if_unlikely(err != cqENOERR){
@@ -712,7 +632,7 @@ etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
         const i64 transTimeNs               = swTxTimeNs + rtto * txAttempts;
 
         if(timeNowNs > transTimeNs){
-            i64 hwTxTimeNs = 0;
+            uint64_t hwTxTimeNs = 0;
             if_unlikely(state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
                 return etcpETRYAGAIN;
             }
@@ -728,7 +648,7 @@ etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
 
 
 
-void doEtcpNetRx(etcpState_t* const state)
+void doEtcpNetRx(etcpState_t* state, etcpConn_t* const conn)
 {
 
     i8 frameBuff[MAX_FRAME] = {0};

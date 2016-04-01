@@ -252,7 +252,7 @@ void htDelete(ht_t* const ht, deleteCb_f deleteCb)
 
 
 
-char* errors[htECOUNT] = {
+static char* errors[htECOUNT] = {
     "Success! No error",
     "No memory available",
     "Key is already in the table",
