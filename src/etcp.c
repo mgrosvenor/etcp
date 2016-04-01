@@ -268,11 +268,6 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
 static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
 {
-
-    WARN("\n\nNEED TO SWAP SRC DST ADDRESSES HERE SOMEHERE\n\n");
-
-
-
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
     cqSlot_t* slot = NULL;
@@ -315,7 +310,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
 
 
 
-static inline  etcpError_t etcpOnRxAck(const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
+static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
     DBG("Working on new ack message\n");
 
@@ -325,7 +320,7 @@ static inline  etcpError_t etcpOnRxAck(const etcpMsgHead_t* head, const i64 len,
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
 
-    //Got a valid data header, more sanity checking
+    //Got a valid sack header, more sanity checking
     const etcpMsgSackHdr_t* const sackHdr = (const etcpMsgSackHdr_t* const)(head + 1);
     const uint64_t sackLen = len - minSizeSackHdr;
     if_unlikely(sackLen != sackHdr->sackCount * sizeof(etcpSackField_t)){
@@ -334,13 +329,33 @@ static inline  etcpError_t etcpOnRxAck(const etcpMsgHead_t* head, const i64 len,
     }
     etcpSackField_t* const sackFields = (etcpSackField_t* const)(sackHdr + 1);
 
-    //Find the connection for this packet
-    etcpConn_t* conn = etcpConnGet(flowId);
-    if_unlikely(!conn){
-        WARN("Trying to ACK a packet on a flow that doesn't exist?\n");
-        return etcpENOTCONN; //Trying to ACK a packet on a flow that doesn't exist
+    //Find the source map for this packet
+    const htKey_t dstKey = {.keyHi = flowId->srcAddr, .keyLo = flowId->srcPort }; //Since this is an ack, we swap src / dst
+    etcpSrcsMap_t* srcsMap = NULL;
+    htError_t htErr = htGet(state->dstMap,&dstKey,(void**)&srcsMap);
+    if_unlikely(htErr == htENOTFOUND){
+        DBG("Ack unexpected. No one listening to destination addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
+        return etcpEREJCONN;
+    }
+    else if_unlikely(htErr != htENOEROR){
+        DBG("Hash table error: %s\n", htError2Str(htErr));
+        return etcpEHTERR;
     }
 
+    //Someone is listening to this destination, but is there also someone listening to the source?
+    etcpConn_t* conn = NULL;
+    const htKey_t srcKey = { .keyHi = flowId->srcAddr, .keyLo = flowId->srcPort };
+    htErr = htGet(srcsMap->table,&srcKey,(void**)&conn);
+    if_unlikely(htErr == htENOTFOUND){
+        DBG("Ack unexpected. No one listening to source addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
+        return etcpEREJCONN;
+    }
+    else if_unlikely(htErr != htENOEROR){
+        DBG("Hash table error: %s\n", htError2Str(htErr));
+        return etcpEHTERR;
+    }
+
+    //By now we have located the connection structure for this ack packet
     //Process the acks
     const uint64_t sackBaseSeq = sackHdr->sackBaseSeq;
     for(i64 sackIdx = 0; sackIdx < sackHdr->sackCount; sackIdx++){

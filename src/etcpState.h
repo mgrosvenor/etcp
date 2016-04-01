@@ -24,9 +24,9 @@ typedef struct etcpConn_s etcpConn_t;
 //The ETCP internal state expects to be provided with hardware send and receive operations, these typedefs spell them out
 //A generic wrapper around the "hardware" tx layer
 //Returns: >0, number of bytes transmitted =0, no send capacity, try again, <0 hw specific error code
-typedef int64_t (*ethHwTx_f)(void* const hwState, const void* const data, const uint64_t len, uint64_t* const hwTxTimeNs );
+typedef int64_t (*ethHwTx_f)(void* const hwState, const void* const data, const int64_t len, int64_t* const hwTxTimeNs );
 //Returns: >0, number of bytes received, =0, nothing available right now, <0 hw specific error code
-typedef int64_t (*ethHwRx_f)(void* const hwState, const void* const data, const uint64_t len, uint64_t* const hwRxTimeNs );
+typedef int64_t (*ethHwRx_f)(void* const hwState, const void* const data, const int64_t len, int64_t* const hwRxTimeNs );
 
 
 typedef struct etcpState_s {

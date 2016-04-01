@@ -332,7 +332,6 @@ void cqDelete(cq_t* const cq)
     free(cq);
 }
 
-
 char* errors[cqECOUNT] = {
     "Success! No error",                    //cqENOERR
     "No memory available",                  //cqENOMEM
