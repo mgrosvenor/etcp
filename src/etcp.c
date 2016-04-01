@@ -31,12 +31,12 @@
 #include "etcp.h"
 
 
-typedef struct  __attribute__((packed)) {
-    i32 srcPort;
-    i32 dstPort;
-    i64 srcAddr;
-    i64 dstAddr;
-} etcpFlowIdConnect_t;
+//typedef struct  __attribute__((packed)) {
+//    i32 srcPort;
+//    i32 dstPort;
+//    i64 srcAddr;
+//    i64 dstAddr;
+//} etcpFlowIdConnect_t;
 
 typedef struct  __attribute__((packed)){
     i32 dstPort;
@@ -53,7 +53,6 @@ struct etcpConn_s {
 
     etcpFlowId_t flowId;
 
-    etcpConn_t* next;   //For chaining into a list/queue
     etcpState_t* state; //For working back to the global state
 
     cq_t* rxcq; //Queue for incoming packets
@@ -74,9 +73,7 @@ struct etcpConn_s {
 
 
 
-
-
-static inline  void etcpConnDelete(etcpConn_t* const conn)
+void etcpConnDelete(etcpConn_t* const conn)
 {
     if_unlikely(!conn){ return; }
 
@@ -95,7 +92,7 @@ static inline int cmpFlowId(const etcpFlowId_t* __restrict lhs, const etcpFlowId
 }
 
 
-static inline  etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize, const etcpFlowId_t* flowId)
+etcpConn_t* etcpConnNew(const i64 windowSize, const i32 buffSize, const uint32_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
 {
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     if_unlikely(!conn){ return NULL; }
@@ -112,7 +109,10 @@ static inline  etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize,
         return NULL;
     }
 
-    conn->flowId = *flowId;
+    conn->flowId.srcAddr = srcAddr;
+    conn->flowId.srcPort = srcPort;
+    conn->flowId.dstAddr = dstAddr;
+    conn->flowId.dstPort = dstPort;
 
     return conn;
 }
@@ -120,8 +120,6 @@ static inline  etcpConn_t* etcpConnNew(const i64 windowSize, const i64 buffSize,
 
 //}
 
-#define MAXSEGS 1024
-#define MAXSEGSIZE (2048 - sizeof(etcpConn_t) - sizeof(cqSlot_t)) //Should bound the CQ slots to 1/2 a page
 static inline etcpError_t etcpOnRxConn(const etcpFlowId_t* const flowId,  etcpConn_t** const conn_o )
 {
     etcpError_t err = etcpConnAdd(MAXSEGS, MAXSEGSIZE, flowId, conn_o);
@@ -211,6 +209,11 @@ static inline etcpError_t etcpOnRxDat(const etcpMsgHead_t* head, const i64 len, 
 
 static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
 {
+
+    WARN("\n\nNEED TO SWAP SRC DST ADDRESSES HERE SOMEHERE\n\n");
+
+
+
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
     cqSlot_t* slot = NULL;
@@ -678,7 +681,7 @@ void doEtcpNetRx(etcpConn_t* const conn)
 
 
 //This is a user facing function
-etcpError_t doEtcpUserRcv(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
+etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
 {
     const i64 rxLen = *len_io;
     while(1){
@@ -718,7 +721,7 @@ etcpError_t doEtcpUserRcv(etcpConn_t* const conn, void* __restrict data, i64* co
 
 //Assumes ethernet packets, does in-place construction of a packet and puts it into the circular queue ready to send
 //This is a user facing function
-etcpError_t etcpEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io)
+etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io)
 {
     const i64 toSendLen = *toSendLen_io;
     i64 bytesSent = 0;

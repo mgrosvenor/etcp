@@ -29,9 +29,11 @@ typedef enum {
     etcpETOOMANY,     //Too many connections, we've run out!
     etcpENOTCONN,     //Not connected to anything
     etcpECQERR,       //Some issue with a Circular Queue
+    etcpEHTERR,       //Some issue with a Hash Table
     etcpERANGE,       //Out of range
     etcpETOOBIG,      //The payload is too big for this buffer
     etcpETRYAGAIN,    //There's nothing to see here, come back again
+    etcpWRONGSOCK,    //Operation on the wrong socket type
     etcpEFATAL,       //Something irrecoverably bad happened! Stop the world!
 } etcpError_t;
 

@@ -233,15 +233,13 @@ void htDelete(ht_t* const ht, deleteCb_f deleteCb)
             continue; //Nothing more to do here
         }
 
-
         //Free all list elements
-        for(htEntry_t* entryNext = entry->next; entry != NULL; ){
+        for(htEntry_t* entryNext = entry->next; entry != NULL; entry = entryNext ){
             entryNext = entry->next;
-            if(deleteCb != NULL){
+            if_likely(deleteCb != NULL){
                 deleteCb(&entry->key, entry->value);
             }
             free(entry);
-            entry = entryNext;
         }
     }
 
