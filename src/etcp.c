@@ -648,7 +648,7 @@ etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
 
 
 
-void doEtcpNetRx(etcpState_t* state, etcpConn_t* const conn)
+void doEtcpNetRx(etcpState_t* state)
 {
 
     i8 frameBuff[MAX_FRAME] = {0};
