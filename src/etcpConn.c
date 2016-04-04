@@ -21,8 +21,8 @@ void etcpConnDelete(etcpConn_t* const conn)
 {
     if_unlikely(!conn){ return; }
 
-    if_likely(conn->txcq != NULL){ cqDelete(conn->txcq); }
-    if_likely(conn->rxcq != NULL){ cqDelete(conn->rxcq); }
+    if_likely(conn->datTxQ != NULL){ cqDelete(conn->datTxQ); }
+    if_likely(conn->datRxQ != NULL){ cqDelete(conn->datRxQ); }
 
     free(conn);
 
@@ -34,14 +34,14 @@ etcpConn_t* etcpConnNew(const i64 windowSize, const i32 buffSize, const uint32_t
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     if_unlikely(!conn){ return NULL; }
 
-    conn->rxcq = cqNew(buffSize,windowSize);
-    if_unlikely(conn->rxcq == NULL){
+    conn->datRxQ = cqNew(buffSize,windowSize);
+    if_unlikely(conn->datRxQ == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
 
-    conn->txcq = cqNew(buffSize,windowSize);
-    if_unlikely(conn->txcq == NULL){
+    conn->datTxQ = cqNew(buffSize,windowSize);
+    if_unlikely(conn->datTxQ == NULL){
         etcpConnDelete(conn);
         return NULL;
     }

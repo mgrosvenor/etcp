@@ -16,7 +16,7 @@
 #include "CircularQueue.h"
 
 typedef struct etcpState_s etcpState_t;
-typedef struct etcpConn_s etcpConn_t;
+
 typedef struct  __attribute__((packed)){
     i32 dstPort;
     i32 srcPort;
@@ -25,17 +25,18 @@ typedef struct  __attribute__((packed)){
 } etcpFlowId_t;
 
 
-
+typedef struct etcpConn_s etcpConn_t;
 struct etcpConn_s {
 
     etcpFlowId_t flowId;
 
     etcpState_t* state; //For working back to the global state
 
-    cq_t* rxcq; //Queue for incoming packets
-    cq_t* txcq; //Queue for outgoing packets
+    cq_t* datRxQ; //Queue for incoming packets
+    cq_t* datTxQ; //Queue for outgoing packets
     i64 lastTx;
-    cq_t* akcq; //Queue for outgoing acknowledgement packets
+    cq_t* ackTxQ; //Queue for outgoing acknowledgement packets
+    cq_t* ackRxQ; //Queue for outgoing acknowledgement packets
 
     i64 seqAck; //The current acknowledge sequence number
     i64 seqSnd; //The current send sequence number

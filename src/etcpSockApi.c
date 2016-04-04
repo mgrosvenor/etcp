@@ -221,7 +221,7 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
 
 
 //Send on an etcpSocket
-etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64* const toSendLen_io, void* txStats)
+etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64* const toSendLen_io)
 {
     if_unlikely(sock->type != ETCPSOCK_SR){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_SR, sock->type);
@@ -229,7 +229,11 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     }
 
     doEtcpUserTx(sock->conn,toSendData,toSendLen_io);
-    (void)txStats;
+
+    //If TX is event triggered then do it now, this is the event!
+    if(sock->etcpState->eventTriggeredTx){
+        sock->etcpState->etcpTxTc(sock->etcpState->etcpTxTcState, sock->conn->datTxQ, sock->conn->ackTxQ, sock->conn->ackTxQ);
+    }
 
 
     return etcpENOERR;
@@ -237,16 +241,22 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
 
 
 //Recv on an etcpSocket
-etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_io, void* rxStats)
+etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_io)
 {
     if_unlikely(sock->type != ETCPSOCK_SR){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_SR, sock->type);
         return etcpWRONGSOCK;
     }
 
-    doEtcpUserRx(sock->conn,data,len_io);
-    (void)rxStats;
+    //If RX is event triggered then do it now, this is the event!
+    if(sock->conn->state->eventTriggeredRx){
+        doEtcpNetRx(sock->conn->state); //This is a generic RX function
+    }
 
+    const i64 maxAcks = sock->conn->state->etcpRxTc(sock->conn->state->etcpRxTcState, sock->conn->datRxQ, sock->conn->ackTxQ);
+    generateAcks(sock->conn,maxAcks);
+
+    doEtcpUserRx(sock->conn,data,len_io);
 
     return etcpENOERR;
 }

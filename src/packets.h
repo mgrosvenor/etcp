@@ -39,13 +39,15 @@ typedef struct __attribute__((packed)){
 
 typedef struct __attribute__((packed)){
     uint64_t seqNum;
-    uint32_t datLen;        //Max 4GB per message
-    uint16_t txAttempts;    //Max 64k retires
-    uint16_t reserved : 13; //Nothing here
-    uint16_t noAck    :  1; //Tell the receiver not to generate an ack for this packet
-    uint16_t ackSent  :  1; //Has the ack for this packet been sent? Only pass the packet up to the user if it has.
-    uint16_t staleDat :  1; //Has this packet already been seen before. If so, don't give it back to the user
+    uint32_t datLen;          //Max 4GB per message
+    uint16_t txAttempts;      //Max 4billion tx attenmpts.
+    uint16_t noAck      :  1; //Tell the receiver not to generate an ack for this packet (ie 'UDP mode')
+    uint16_t noRet      :  1; //The the recevier not to generate a return path
 
+    //Keeping this state here beacuse I can. It could be in some kind of meta structure, but I have the bits here anyway
+    uint16_t ackSent    :  1; //Has the ack for this packet been sent? Only pass the packet up to the user if it has.
+    uint16_t staleDat   :  1; //Has this packet already been seen before. If so, don't give it back to the user
+    uint16_t reserved   : 12; //Nothing here
 } etcpMsgDatHdr_t;
 
 //Enum describing the types of etcp packets.
@@ -68,11 +70,24 @@ typedef enum {
 typedef struct __attribute__((packed)){
     union{
         struct{
+            //Top 48 bits
             uint64_t magic     :32;  //ASCII encoded "ETCP" -- To make hexdumps easier to parse
             uint64_t ver       :8;  //Protocol version. Max 255 versions
-            uint64_t type      :24; //16M different message types for each protocol version. How could we run out...?
+            uint64_t type      :8; //256 different message types for each protocol version. How could we run out...?
+
+            //Bottom 16 bits
+            uint32_t hwTxTs    :1; //Does this packet have a harware TX timestamp in it?
+            uint32_t hwRxTs    :1; //Does this packet have a harware RX timestamp in it?
+            uint32_t swTxTs    :1; //Does this packet have a software TX timestamp in it?
+            uint32_t swRxTs    :1; //Does this packet have a software RX timestamp in it?
+            uint64_t reserved  :12;
+
         };
-        uint64_t fulltype; //A full type is the magic string, version number and message type in one 64bit into make it easy to parse
+        struct{
+            uint64_t fulltype  : 48; //A full type is the magic string, version number and message type in a single uint into make it easy to parse and compare
+            uint64_t fullflags : 4;  //Full flags is a an int containing all flags for easy comparison
+            uint64_t _reserved : 12; //Ignore this
+        };
     };
     uint64_t srcPort;    //"port" on the tx side, max 4 billion ports
     uint64_t dstPort;    //"port" on the rx side, max 4 billion ports
@@ -102,6 +117,6 @@ _Static_assert(ETCP_MAX_SACKS >= 10 , "Make sure there is some reasonable number
 
 #define ETCP_MAGIC 0x45544350ULL //"ETCP" in ASCII
 #define ETCP_V1 0x1ULL
-#define ETCP_V1_FULLHEAD(MSG) ((ETCP_MAGIC << 32) + (ETCP_V1 << 24) + (MSG) )
+#define ETCP_V1_FULLHEAD(MSG) ((ETCP_MAGIC << 16) + (ETCP_V1 << 8) + (MSG << 0) )
 
 #endif /* SRC_PACKETS_H_ */
