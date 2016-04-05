@@ -235,6 +235,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
         sock->etcpState->etcpTxTc(sock->etcpState->etcpTxTcState, sock->conn->datTxQ, sock->conn->ackTxQ, sock->conn->ackTxQ);
     }
 
+    doEtcpNetTx(sock->conn);
 
     return etcpENOERR;
 }

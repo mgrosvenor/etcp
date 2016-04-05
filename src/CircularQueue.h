@@ -28,8 +28,6 @@ typedef struct __attribute__((packed)){
         volatile cqSlotState_t __state;
         volatile uint64_t ___state;
     };
-
-
     i64 len;     //Length of buffer
     void* buff;  //Place to get/put data
 } cqSlot_t;

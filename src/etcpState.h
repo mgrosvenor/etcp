@@ -24,12 +24,16 @@
 
 typedef struct etcpConn_s etcpConn_t;
 
-//The core feature of ETCP is that transmission control is external. These two functions provide the interface to that feature.
+//The core feature of ETCP is that transmission control is externalised. These two functions provide the interface to that
+//feature.
+
 //Returns: >0 this is the number of acknowledgement packets that can be generated. <=0 no ack packets will be generated
 typedef int64_t (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ );
+
 //Returns: >0 the number of bytes that we can TX. If the function is interested in the RX Acks, it should deque them from
 //         the ackRxQ before it runs out of capacity.
-typedef int64_t (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackTxQ, const cq_t* ackRxQ );
+typedef int64_t (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ );
+
 
 
 //The ETCP internal state expects to be provided with hardware send and receive operations, these typedefs spell them out

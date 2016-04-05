@@ -34,8 +34,11 @@ struct etcpConn_s {
 
     cq_t* datRxQ; //Queue for incoming packets
     cq_t* datTxQ; //Queue for outgoing packets
-    i64 lastTx;
+    i64 lastDatTxIdx;
+
     cq_t* ackTxQ; //Queue for outgoing acknowledgement packets
+    i64 lastAckTxIdx;
+
     cq_t* ackRxQ; //Queue for outgoing acknowledgement packets
 
     i64 seqAck; //The current acknowledge sequence number

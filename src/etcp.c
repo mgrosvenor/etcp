@@ -424,6 +424,7 @@ static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, cons
 
 }
 
+//Put a sack packet into a buffer for transmit
 static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* const sackHdrAndData, const i64 sackCount)
 {
     cqSlot_t* slot = NULL;
@@ -439,8 +440,12 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
     }
 
     //We got a slot, now check it's big enough then format a packet into it
-    i8* buff = slot->buff;
-    i64 buffLen = slot->len;
+    pBuff_t * pBuff = slot->buff;
+    pBuff->buffer = (i8*)slot->buff + sizeof(pBuff_t);
+    pBuff->buffSize = slot->len - sizeof(pBuff_t);
+
+    i8* buff = pBuff->buffer;
+    i64 buffLen = pBuff->buffSize;
     const i64 sackHdrAndDatSize = sizeof(etcpMsgSackHdr_t) + sizeof(etcpSackField_t) * sackCount;
     const i64 ethEtcpSackPktSize = ETCP_ETH_OVERHEAD + sizeof(etcpMsgHead_t) + sackHdrAndDatSize;
     if_unlikely(buffLen < ethEtcpSackPktSize){
@@ -454,18 +459,28 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
         WARN("Could not format Ethernet packet\n");
         return etcpErr;
     }
+    pBuff->encapHdr = buff;
+    pBuff->encapHdrSize = ethLen;
     buff += ethLen;
 
 
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     etcpMsgHead_t* const head = (etcpMsgHead_t* const)buff;
+    pBuff->etcpHdr      = head;
+    pBuff->etcpHdrSize  = sizeof(etcpMsgHead_t);
     head->fulltype      = ETCP_V1_FULLHEAD(ETCP_ACK);
     //Reverse the source and destination ports so that the packet goest back to where it came from
     head->srcPort       = conn->flowId.dstPort;
     head->dstPort       = conn->flowId.srcPort;
     head->ts.swTxTimeNs = ts.tv_nsec * 1000 * 1000 * 1000 + ts.tv_nsec;
     buff                += sizeof(etcpMsgHead_t);
+
+    pBuff->etcpSackHdr      = (etcpMsgSackHdr_t*)buff;
+    pBuff->etcpSackHdrSize  = sizeof(etcpMsgSackHdr_t);
+
+    pBuff->etcpPayload  = buff + sizeof(etcpMsgSackHdr_t);
+    pBuff->etcpPayloadSize = sizeof(etcpSackField_t) * sackCount;
 
     memcpy(buff,sackHdrAndData,sackHdrAndDatSize);
 
@@ -602,35 +617,15 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
 }
 
 
-
-//Traverse the send queues and check what can be sent.
-//First look over the ack send queue, we send ACK packets as a priority. If the ackQueue is empty, then look over the send
-//queue and check if anything has timed out.
-etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
+static inline etcpError_t txRing(cq_t* const cq, i64* const lastTxIdx_io, const etcpState_t* const state, const i64 maxSlots )
 {
-    //Sending the ack's is simple, just send and forget;
     cqSlot_t* slot = NULL;
-    i64 slotIdx;
-    while(cqGetNextRd(conn->ackTxQ,&slot,&slotIdx) != cqENOSLOT){
-        uint64_t hwTxTimeNs = 0;
-        state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs);
-        cqError_t err = cqReleaseSlotRd(conn->ackTxQ,slotIdx);
-        if_unlikely(err != cqENOERR){
-            ERR("CQ had an error: %s\n", cqError2Str(err));
-            return etcpECQERR;
-        }
-    }
+    i64 lastTxIdx  = *lastTxIdx_io;
+    i64 hwTxCount  = 0;
 
-    struct timespec ts = {0};
-    clock_gettime(CLOCK_REALTIME,&ts);
-    const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
-
-    //Sending the TX packets is a little more complicated because they need to stay until we've received an ack.
-    const i64 slotCount = conn->datTxQ->slotCount;
-    for(i64 i = 0; i < slotCount; i++){
-
-        conn->lastTx = conn->lastTx + 1 <  slotCount ? conn->lastTx + 1 : conn->lastTx + 1 - slotCount;
-        const cqError_t err = cqGetSlotIdx(conn->ackTxQ,&slot,conn->lastTx);
+    const i64 slotCount = cq->slotCount;
+    for(i64 i = 0; i < slotCount && i < maxSlots; i++){
+        const cqError_t err = cqGetSlotIdx(cq,&slot,lastTxIdx);
         if_eqlikely(err == cqEWRONGSLOT){
             //The slot is empty
             continue;
@@ -640,25 +635,106 @@ etcpError_t doEtcpNetTx(etcpState_t* state, etcpConn_t* const conn)
             return etcpECQERR;
         }
 
-        //We've now got a valid slot with a packet in it, grab the timestamp to see if it needs sending.
-        const i64 skipEthHdrOffset          = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + sizeof(eth8021qTCI_t);
-        const i8* const slotBuff            = slot->buff;
-        etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff + skipEthHdrOffset);
-        const etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head +1);
-        const i64 rtto                      = conn->retransTimeOut;
-        const i64 swTxTimeNs                = head->ts.swRxTimeNs;
-        const i64 txAttempts                = datHdr->txAttempts;
-        const i64 transTimeNs               = swTxTimeNs + rtto * txAttempts;
+        //We've now got a valid slot with a packet in it, grab it and see if the TC has decided it should be sent?
+        pBuff_t* const pBuff = slot->buff;
 
-        if(timeNowNs > transTimeNs){
-            uint64_t hwTxTimeNs = 0;
-            if_unlikely(state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
-                return etcpETRYAGAIN;
-            }
-            head->ts.hwTxTimeNs = hwTxTimeNs;
-            //Do NOT release the slot here. The release will happen in the RX code when an ack comes through.
+        if_eqlikely(pBuff->txState == ETCP_TX_DRP ){
+            //We're told to drop the packet. Release it and continue
+            cqReleaseSlotRd(cq,lastTxIdx);
+            continue;
         }
+        else if_unlikely(pBuff->txState != ETCP_TX_NOW ){
+            continue; //Not ready to send this packet now.
+        }
+
+        switch(pBuff->etcpHdr->type){
+            case ETCP_DAT:{
+                if_likely(pBuff->etcpDatHdr->txAttempts == 0){
+                    //Only put the timestamp in on the first time we send a data packet so we know how long it spends RTT incl
+                    //in the txq.
+                    //Would be nice to have an extra timestamp slot so that the local queueing time could be accounted for as well.
+                    struct timespec ts = {0};
+                    clock_gettime(CLOCK_REALTIME,&ts);
+                    const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
+                    pBuff->etcpHdr->ts.swTxTimeNs = timeNowNs;
+                    pBuff->etcpHdr->swTxTs        = 1;
+                }
+                break;
+            }
+            case ETCP_ACK:{
+                struct timespec ts = {0};
+                clock_gettime(CLOCK_REALTIME,&ts);
+                const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
+                pBuff->etcpHdr->ts.swTxTimeNs = timeNowNs;
+                pBuff->etcpHdr->swTxTs        = 1;
+                break;
+            }
+            default:{
+                ERR("Unkown packet type! %i\n",pBuff->etcpHdr->type );
+                return etcpEFATAL;
+            }
+        }
+
+        uint64_t hwTxTimeNs = 0;
+        if_unlikely(state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
+            return etcpETRYAGAIN;
+        }
+        hwTxCount++;
+
+        //The exanics do not yet support inline HW tx timestamping, but we can kind of fake it here
+        //XXX HACK - not sure what a generic way to do this is?
+        if_likely(pBuff->etcpDatHdr->txAttempts == 0){
+            pBuff->etcpHdr->ts.hwTxTimeNs = hwTxTimeNs;
+            pBuff->etcpHdr->hwTxTs        = 1;
+        }
+
+        pBuff->etcpDatHdr->txAttempts++; //Keep this around for next time.
+
+        switch(pBuff->etcpHdr->type){
+            case ETCP_DAT:{
+                if_eqlikely(pBuff->etcpDatHdr->noAck){
+                    //We're done with the packet, not expecting an ack, so drop it now
+                    cqReleaseSlotRd(cq,lastTxIdx);
+                }
+                //Otherwise, we need to wait for the packet to be ack'd
+                break;
+            }
+            case ETCP_ACK:{
+                cqReleaseSlotRd(cq,lastTxIdx);
+                break;
+            }
+            default:{
+                ERR("Unkown packet type! %i\n",pBuff->etcpHdr->type );
+                return etcpEFATAL;
+            }
+
+        }
+
+        //Inciment the last sent index so next time we come back we start at a resonable place?
+        //TODO XXX, could probably make this a part of the TC call
+        lastTxIdx = lastTxIdx + 1 <  slotCount ? lastTxIdx + 1 : lastTxIdx + 1 - slotCount;
     }
+
+    return etcpENOERR;
+}
+
+
+//Traverse the send queues and check what can be sent.
+//First look over the ack send queue, we send ACK packets as a priority. If the ackQueue is empty, then look over the send
+//queue and check if anything has timed out.
+etcpError_t doEtcpNetTx(etcpConn_t* const conn, const i64 ackFirst, const i64 maxAckSlots, const i64 maxDatSlots)
+{
+    etcpState_t* state = conn->state;
+
+    if_eqlikely(ackFirst){
+        txRing(conn->ackTxQ,&conn->lastAckTxIdx,conn->state,maxAckSlots);
+        txRing(conn->datTxQ,&conn->lastDatTxIdx,conn->state,maxDatSlots);
+    }
+    else{
+        txRing(conn->datTxQ,&conn->lastDatTxIdx,conn->state,maxDatSlots);
+        txRing(conn->ackTxQ,&conn->lastAckTxIdx,conn->state,maxAckSlots);
+    }
+
 
     return etcpENOERR;;
 }
@@ -740,7 +816,7 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         i64 slotIdx = 0;
         cqError_t cqErr = cqGetNextWr(txcq,&slot,&slotIdx);
 
-        //We haven't send as much as we'd hoped, set the len_io and tell user to try again
+        //We haven't sent as much as we'd hoped, set the len_io and tell user to try again
         if_unlikely(cqErr == cqENOSLOT){
             *toSendLen_io = bytesSent;
             return etcpETRYAGAIN;
@@ -751,15 +827,22 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
             return etcpECQERR;
         }
 
-        //We got a slot, now format a packet into it
-        i8* buff = slot->buff;
-        i64 buffLen = slot->len;
-        i64 ethLen = buffLen;
+        //We got a slot, now format a pBuff into it
+        pBuff_t* pBuff  = slot->buff;
+        pBuff->buffer   = pBuff + 1;
+        pBuff->buffSize = slot->len - sizeof(pBuff);
+
+        i8* buff    = pBuff->buffer;
+        i64 buffLen = pBuff->buffSize;
+        i64 ethLen  = buffLen;
+        //XXX HACK - This should be externalised and happen after the ETCP packet formatting to allow multiple carrier transports
         etcpError_t etcpErr = etcpMkEthPkt(buff,&ethLen,conn->flowId.srcAddr, conn->flowId.dstAddr,conn->vlan, conn->priority);
         if_unlikely(etcpErr != etcpENOERR){
             WARN("Could not format Ethernet packet\n");
             return etcpErr;
         }
+        pBuff->encapHdr = buff;
+        pBuff->encapHdrSize = ethLen;
         buff += ethLen;
         buffLen -= ethLen;
 
@@ -774,19 +857,31 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         struct timespec ts = {0};
         clock_gettime(CLOCK_REALTIME,&ts);
         etcpMsgHead_t* const head = (etcpMsgHead_t* const)buff;
+        pBuff->etcpHdr = head;
+        pBuff->etcpHdrSize = sizeof(etcpMsgHead_t);
+
         head->fulltype      = ETCP_V1_FULLHEAD(ETCP_DAT);
         head->srcPort       = conn->flowId.srcPort;
         head->dstPort       = conn->flowId.dstPort;
         head->ts.swTxTimeNs = ts.tv_nsec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
+
         etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
+        pBuff->etcpPayHdr = (etcpMsgDatHdr_t)datHdr;
+        pBuff->etcpPayHdrSize = sizeof(etcpMsgDatHdr_t);
+
 
         datHdr->datLen     = datLen;
         datHdr->seqNum     = conn->seqSnd;
         datHdr->txAttempts = 0;
 
         void* const msgDat = (void* const)(datHdr + 1);
+        pBuff->etcpPayload = msgDat;
+        pBuff->etcpPayloadSize = sizeof(datLen);
+
         memcpy(msgDat,toSendData,datLen);
+
+        pBuff->txState = ETCP_TX_RDY; //Packet is ready to be sent, subject to Transmission Control.
 
         //At this point, the packet is now ready to send!
         const i64 totalLen = ethLen + hdrsLen + datLen;

@@ -40,7 +40,7 @@ typedef struct __attribute__((packed)){
 typedef struct __attribute__((packed)){
     uint64_t seqNum;
     uint32_t datLen;          //Max 4GB per message
-    uint16_t txAttempts;      //Max 4billion tx attenmpts.
+    uint16_t txAttempts;      //Max 65K tx attenmpts.
     uint16_t noAck      :  1; //Tell the receiver not to generate an ack for this packet (ie 'UDP mode')
     uint16_t noRet      :  1; //The the recevier not to generate a return path
 
@@ -50,6 +50,9 @@ typedef struct __attribute__((packed)){
     uint16_t reserved   : 12; //Nothing here
 } etcpMsgDatHdr_t;
 
+//Assumes a fast layer 2 network (10G plus), with built in check summing and reasonable latency. In this case, sending
+//more bits, is better than sending many more packets at higher latency. Keep this generic header pretty minimal, but use nice
+//large types without too many range restrictions.
 //Enum describing the types of etcp packets.
 typedef enum {
     ETCP_ERR = 0x00, //Not a valid message, something wrong
@@ -63,10 +66,6 @@ typedef enum {
 
 } etcpMsgType_t;
 
-
-//Assumes a fast layer 2 network (10G plus), with built in check summing and reasonable latency. In this case, sending
-//more bits, is better than sending many more packets at higher latency. Keep this generic header pretty minimal, but use nice
-//large types without too many range restrictions.
 typedef struct __attribute__((packed)){
     union{
         struct{
@@ -76,10 +75,12 @@ typedef struct __attribute__((packed)){
             uint64_t type      :8; //256 different message types for each protocol version. How could we run out...?
 
             //Bottom 16 bits
-            uint32_t hwTxTs    :1; //Does this packet have a harware TX timestamp in it?
-            uint32_t hwRxTs    :1; //Does this packet have a harware RX timestamp in it?
-            uint32_t swTxTs    :1; //Does this packet have a software TX timestamp in it?
-            uint32_t swRxTs    :1; //Does this packet have a software RX timestamp in it?
+            uint64_t hwTxTs    :1; //Does this packet have a harware TX timestamp in it?
+            uint64_t hwRxTs    :1; //Does this packet have a harware RX timestamp in it?
+            uint64_t swTxTs    :1; //Does this packet have a software TX timestamp in it?
+            uint64_t swRxTs    :1; //Does this packet have a software RX timestamp in it?
+
+            //Metadata XXX HACK - this should really not be inline in the packet, but I have the space right now
             uint64_t reserved  :12;
 
         };
@@ -113,10 +114,43 @@ _Static_assert(sizeof(etcpMsgHead_t) == 7 * sizeof(uint64_t) , "Don't let this g
 #define ETCP_MAX_SACKS ( (i64)((ETCP_MAX_SACK_PKT - ETCP_ETH_OVERHEAD - ETCP_SACKHDR_OVERHEAD) / (sizeof(etcpSackField_t))) )
 _Static_assert(ETCP_MAX_SACKS >= 10 , "Make sure there is some reasonable number of sacks available");
 
-
-
 #define ETCP_MAGIC 0x45544350ULL //"ETCP" in ASCII
 #define ETCP_V1 0x1ULL
 #define ETCP_V1_FULLHEAD(MSG) ((ETCP_MAGIC << 16) + (ETCP_V1 << 8) + (MSG << 0) )
+
+
+typedef enum {
+    ETCP_TX_RDY = 0,
+    ETCP_TX_NOW = 1,
+    ETCP_TX_DRP = 2
+} txState_t;
+
+typedef struct {
+    txState_t txState;
+
+    void* buffer;
+    i64 buffSize;
+
+    void* encapHdr;
+    i64 encapHdrSize;
+
+    etcpMsgHead_t* etcpHdr;
+    i64 etcpHdrSize;
+
+    union{
+        etcpMsgDatHdr_t* etcpDatHdr;
+        etcpMsgSackHdr_t* etcpSackHdr;
+    };
+    union{
+        i64 etcpDatHdrSize;
+        i64 etcpSackHdrSize;
+    };
+
+    void* etcpPayload;
+    i64 etcpPayloadSize;
+
+} pBuff_t; //An ETCP packet buffer
+
+
 
 #endif /* SRC_PACKETS_H_ */
