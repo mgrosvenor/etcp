@@ -140,10 +140,12 @@ typedef struct {
     union{
         etcpMsgDatHdr_t* etcpDatHdr;
         etcpMsgSackHdr_t* etcpSackHdr;
+        void* etcpPayHdr;
     };
     union{
         i64 etcpDatHdrSize;
         i64 etcpSackHdrSize;
+        i64 etcpPayHdrSize;
     };
 
     void* etcpPayload;

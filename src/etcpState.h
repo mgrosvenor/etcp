@@ -30,9 +30,7 @@ typedef struct etcpConn_s etcpConn_t;
 //Returns: >0 this is the number of acknowledgement packets that can be generated. <=0 no ack packets will be generated
 typedef int64_t (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ );
 
-//Returns: >0 the number of bytes that we can TX. If the function is interested in the RX Acks, it should deque them from
-//         the ackRxQ before it runs out of capacity.
-typedef int64_t (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ );
+typedef void (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ, bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o );
 
 
 
@@ -81,7 +79,7 @@ typedef struct etcpSrcConns_s {
 } etcpSrcsMap_t;
 
 
-etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx, const etcpTxTc_f etcpTxTc, const etcpRxTc_f etcpRxTc);
+etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx);
 etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
 
 #endif /* SRC_ETCPSTATE_H_ */

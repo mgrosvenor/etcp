@@ -724,7 +724,6 @@ static inline etcpError_t txRing(cq_t* const cq, i64* const lastTxIdx_io, const 
 //queue and check if anything has timed out.
 etcpError_t doEtcpNetTx(etcpConn_t* const conn, const i64 ackFirst, const i64 maxAckSlots, const i64 maxDatSlots)
 {
-    etcpState_t* state = conn->state;
 
     if_eqlikely(ackFirst){
         txRing(conn->ackTxQ,&conn->lastAckTxIdx,conn->state,maxAckSlots);
@@ -867,8 +866,8 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
 
 
         etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
-        pBuff->etcpPayHdr = (etcpMsgDatHdr_t)datHdr;
-        pBuff->etcpPayHdrSize = sizeof(etcpMsgDatHdr_t);
+        pBuff->etcpDatHdr = datHdr;
+        pBuff->etcpDatHdrSize = sizeof(etcpMsgDatHdr_t);
 
 
         datHdr->datLen     = datLen;

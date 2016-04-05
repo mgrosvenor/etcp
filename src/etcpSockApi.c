@@ -230,12 +230,23 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
 
     doEtcpUserTx(sock->conn,toSendData,toSendLen_io);
 
+    bool ackFirst = true;
+    i64 maxAck = -1;
+    i64 maxDat = -1;
+
     //If TX is event triggered then do it now, this is the event!
     if(sock->etcpState->eventTriggeredTx){
-        sock->etcpState->etcpTxTc(sock->etcpState->etcpTxTcState, sock->conn->datTxQ, sock->conn->ackTxQ, sock->conn->ackTxQ);
+        sock->etcpState->etcpTxTc(
+                sock->etcpState->etcpTxTcState,
+                sock->conn->datTxQ,
+                sock->conn->ackTxQ,
+                sock->conn->ackTxQ,
+                &ackFirst,
+                &maxAck,
+                &maxDat);
     }
 
-    doEtcpNetTx(sock->conn);
+    doEtcpNetTx(sock->conn,ackFirst,maxAck,maxDat);
 
     return etcpENOERR;
 }

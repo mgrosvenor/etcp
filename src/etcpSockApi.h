@@ -33,10 +33,10 @@ etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlog);
 etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acceptSock_o);
 
 //Send on an etcpSocket
-etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64* const toSendLen_io, void* txStats);
+etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64* const toSendLen_io);
 
 //Recv on an etcpSocket
-etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_io, void* rxStats);
+etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_io);
 
 //Close down the socket and free resources
 void etcpClose(etcpSocket_t* const sock);
