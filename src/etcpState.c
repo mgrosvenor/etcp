@@ -24,7 +24,8 @@ void connHTDelete(const htKey_t* const key, void* const value)
 }
 
 
-void srcsMapDelete(etcpSrcsMap_t* const srcConns){
+void srcsMapDelete(etcpLAMap_t* const srcConns)
+{
     if_unlikely(!srcConns){
         return;
     }
@@ -39,9 +40,9 @@ void srcsMapDelete(etcpSrcsMap_t* const srcConns){
 }
 
 
-etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
+etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
 {
-    etcpSrcsMap_t* const srcConns = (etcpSrcsMap_t* const )calloc(1,sizeof(etcpSrcsMap_t));
+    etcpLAMap_t* const srcConns = (etcpLAMap_t* const )calloc(1,sizeof(etcpLAMap_t));
     if_unlikely(!srcConns){
         return NULL;
     }
@@ -63,7 +64,7 @@ etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t liste
 void srcConnsHTDelete(const htKey_t* const key, void* const value)
 {
     DBG("HT deleting src cons for dstA=%li dstP=%li\n", key->keyHi, key->keyLo);
-    etcpSrcsMap_t* const srcConns = (etcpSrcsMap_t* const)value;
+    etcpLAMap_t* const srcConns = (etcpLAMap_t* const)value;
     srcsMapDelete(srcConns);
 }
 

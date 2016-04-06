@@ -49,10 +49,10 @@ typedef struct etcpState_s {
     ethHwTx_f ethHwTx; //Callback for abstracting ethernet hardware TX
     ethHwRx_f ethHwRx; //Callback for abstracting ethernet hardware RX
 
-    void* etcpRxTcState;     //Pointer for user supplied Tranmission Control TX state
+    void* etcpRxTcState; //Pointer for user supplied Tranmission Control TX state
     etcpRxTc_f etcpRxTc; //Callback for implementing congestion control on the RX side (generating acks).
 
-    void* etcpTxTcState;     //Pointer for user supplied Tranmission Control TX state
+    void* etcpTxTcState; //Pointer for user supplied Tranmission Control TX state
     etcpTxTc_f etcpTxTc; //Callback for implementing congestion control on the TX side (sending frames).
 
     //If you are using event triggered TX, you need to ensure that "send" is called regulalrly to trigger retransmit timeouts
@@ -65,8 +65,8 @@ typedef struct etcpState_s {
 
 
 //This structure contains all unique source address/port combination connections for a given destination address/port combination.
-typedef struct etcpSrcConns_s etcpSrcsMap_t;
-typedef struct etcpSrcConns_s {
+typedef struct etcpSrcsMap_s etcpLAMap_t;
+typedef struct etcpSrcsMap_s {
 
     //These are for new connections that happen when we're listening
     uint32_t listenWindowSize;
@@ -76,10 +76,19 @@ typedef struct etcpSrcConns_s {
 
     ht_t* table; //All unique src address/port combinations
 
-} etcpSrcsMap_t;
+} etcpLAMap_t;
+
+
+typedef struct etcpSRConns_s {
+    etcpConn_t* recvConn;
+    etcpConn_t* sendConn;
+} etcpSRConns_t;
+
+
 
 
 etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx);
-etcpSrcsMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
+etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
+void srcsMapDelete(etcpLAMap_t* const srcConns);
 
 #endif /* SRC_ETCPSTATE_H_ */

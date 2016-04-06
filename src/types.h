@@ -33,7 +33,7 @@ typedef enum {
     etcpERANGE,       //Out of range
     etcpETOOBIG,      //The payload is too big for this buffer
     etcpETRYAGAIN,    //There's nothing to see here, come back again
-    etcpWRONGSOCK,    //Operation on the wrong socket type
+    etcpEWRONGSOCK,   //Operation on the wrong socket type
     etcpEFATAL,       //Something irrecoverably bad happened! Stop the world!
     etcpEREJCONN,     //Rejecting this connection
 } etcpError_t;

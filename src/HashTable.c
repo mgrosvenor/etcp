@@ -31,6 +31,7 @@ typedef struct ht_s {
     uint64_t entrySize;
     uint64_t tableEntriesLog2;
     uint64_t tableEntries;
+    uint64_t count;
     htEntry_t** table;
 } ht_t;
 
@@ -131,6 +132,7 @@ htError_t htAddNew(ht_t* const ht, const htKey_t* const key, void* value  )
     entry->next       = newEntry;
     entry->next->key   = *key;
     entry->next->value = value;
+    //ht->count++;
     return htENOEROR;
 }
 
@@ -205,6 +207,7 @@ void htRem(ht_t* const ht, const htKey_t* const key )
     if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
         ht->table[idx] = entry->next; //Reassign the table entry
         free(entry); //Free the old entry
+        //ht->count--;
         return;
     }
 
@@ -214,6 +217,7 @@ void htRem(ht_t* const ht, const htKey_t* const key )
         if_eqlikely(memcmp(key, &entry->key, sizeof(htKey_t)) == 0){
             prev->next = entry->next; //Reassign the links
             free(entry); //Free the old entry
+            //ht->count--;
             return;
         }
     }

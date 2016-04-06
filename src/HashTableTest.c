@@ -28,6 +28,7 @@ typedef struct ht_s {
     uint64_t entrySize;
     uint64_t tableEntriesLog2;
     uint64_t tableEntries;
+    uint64_t count;
     htEntry_t* table;
 } ht_t;
 

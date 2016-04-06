@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "etcpSockApi.h"
 #include "etcp.h"
@@ -35,11 +36,48 @@ typedef struct etcpSocket_s
 
     socketType_t type;
     union{
-        etcpSrcsMap_t* la;
-        etcpConn_t* conn;
+        etcpLAMap_t* la;  //For listening/acepting new connections
+        etcpSRConns_t sr; //For seding/receving on existing connections
     };
 } etcpSocket_t;
 
+
+//Delete a socket
+void etcpSockeDelete(etcpSocket_t* const sock)
+{
+    //What?
+    if_unlikely(!sock){
+        WARN("Supplied an empty socket structure to delete?\n");
+        return;
+    }
+
+    //Deal with socket internal members
+    switch(sock->type){
+        case ETCPSOCK_SR:
+            if(sock->sr.sendConn){
+                etcpConnDelete(sock->sr.sendConn);
+            }
+            if(sock->sr.recvConn){
+                etcpConnDelete(sock->sr.recvConn);
+            }
+            break;
+        case ETCPSOCK_LA:
+            if(sock->la){
+                srcsMapDelete(sock->la);
+            }
+            break;
+
+        case ETCPSOCK_UK:
+            //Nothing to do here, we don't know what socket type it is
+            break;
+
+        //defualt intentionally no default case so that extra values in the enum will be picked up
+
+    }
+
+    //Done with the socket now too.
+    free(sock);
+}
 
 
 //Make a new "socket" for either listening on or writing to
@@ -56,22 +94,78 @@ etcpSocket_t* etcpSocketNew(etcpState_t* const etcpState)
 
 }
 
-//Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
-etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
+etcpError_t remConnMapping(etcpSocket_t* const sock, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
 {
-    if(sock->type != ETCPSOCK_UK){
-        WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
-        return etcpWRONGSOCK;
+
+    if_unlikely(!sock){
+        ERR("Why are you trying to remove from an empty socket?\n");
+        return etcpERANGE;
+    }
+
+    //Uniqye con mappings are only found in in send/recieve sockets
+    if_unlikely(sock->type != ETCPSOCK_SR){
+        WARN("Wrong socket type supplied\n");
+        return etcpEWRONGSOCK;
     }
 
     etcpState_t* const state = sock->etcpState;
     ht_t* const dstMap = state->dstMap;
-    htKey_t dstKey = {.keyHi = srcAddr, .keyLo = srcPort }; //Flip the SRC/DST around so they match the listener side
-    etcpSrcsMap_t* srcsMap = NULL;
 
+    htKey_t dstKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side
+    etcpLAMap_t* srcsMap = NULL;
     //First check if this destination is in our destinations map, if not, add a new sources map, based on this destination
     htError_t htErr = htGet(dstMap,&dstKey,(void**)&srcsMap);
-    if(htErr == htENOTFOUND){
+    if_unlikely(htErr == htENOTFOUND){
+        ERR("Why are you trying to remove a connection that's not there?\n");
+        return etcpEHTERR;
+    }
+
+    //This should probably be made thread safe??
+    etcpConn_t* conn = NULL;
+    ht_t* const srcsTable = srcsMap->table;
+    htKey_t srcKey = {.keyHi = srcAddr, .keyLo = srcPort }; //Flip the SRC/DST around so they match the listener side    ;
+    htErr = htGet(srcsTable,&srcKey,(void**)&conn);
+    if_unlikely(htErr == htENOEROR){
+        ERR("Why are you trying to remove a connection that's not there?\n");
+        return etcpENOTCONN;
+    }
+
+    //Delete the conenction
+    etcpConnDelete(conn);
+
+    //If the srcmap is empty (except for this entry), get rid of it too
+    if_eqlikely(srcsMap->listenQ->wrSlotsUsed == 1){
+        srcsMapDelete(srcsMap);
+
+        //And remove it from the destination map
+        htRem(dstMap,&dstKey);
+    }
+
+
+    return etcpENOERR;
+}
+
+
+
+
+
+
+
+etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort, bool isSender)
+{
+    if_unlikely(sock->type != ETCPSOCK_SR){
+        WARN("Wrong socket type supplied\n");
+        return etcpEWRONGSOCK;
+    }
+
+    etcpState_t* const state = sock->etcpState;
+    ht_t* const dstMap = state->dstMap;
+
+    htKey_t dstKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side
+    etcpLAMap_t* srcsMap = NULL;
+    //First check if this destination is in our destinations map, if not, add a new sources map, based on this destination
+    htError_t htErr = htGet(dstMap,&dstKey,(void**)&srcsMap);
+    if_eqlikely(htErr == htENOTFOUND){
         srcsMap = srcsMapNew(0,0); //Listen window/buff size = 0 because we are not listening.
         if_unlikely(!srcsMap){
             WARN("Ran out of memory making new sources connections container\n");
@@ -79,30 +173,62 @@ etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, con
         }
 
         htErr = htAddNew(dstMap,&dstKey,srcsMap);
-        if(htErr != htENOEROR){
+        if_unlikely(htErr != htENOEROR){
             ERR("Failed on hash table with error=%li\n", htErr);
             return etcpENOTCONN;
         }
     }
 
-    //We have a sources map for this destination. Now make a new connection
-    sock->type = ETCPSOCK_SR;
-    sock->conn = etcpConnNew(windowSize,buffSize,srcAddr,srcPort, dstAddr,dstPort);
-    if_unlikely(sock->conn == NULL){
+    //We have a sources map for this destination. Make a new connection structure
+    etcpConn_t* const conn = etcpConnNew(sock->etcpState, windowSize,buffSize,srcAddr,srcPort, dstAddr,dstPort);
+    if_unlikely(conn == NULL){
         WARN("Ran out of memory trying to make a new connection\n");
         return etcpENOMEM;
     }
 
     //Now add the connection into the sources map
+    //This should probably be made thread safe??
     ht_t* const srcsTable = srcsMap->table;
-    htKey_t srcKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side    ;
-    htErr = htAddNew(srcsTable,&srcKey,sock->conn);
+    htKey_t srcKey = {.keyHi = srcAddr, .keyLo = srcPort }; //Flip the SRC/DST around so they match the listener side    ;
+    htErr = htAddNew(srcsTable,&srcKey,conn);
     if_unlikely(htErr == htENOEROR){
         WARN("Trying to setup an exisiting connection\n");
         //We're already connected using the same source and destination ports!
         //Clean up the mess
-        etcpConnDelete(sock->conn);
+        etcpConnDelete(conn);
         return etcpEALREADY;
+    }
+
+    //All mapped, now put the result into the right socket and return
+    if_eqlikely(isSender){
+        sock->sr.sendConn = conn;
+    }
+    else{
+        sock->sr.recvConn = conn;
+    }
+
+    return etcpENOERR;
+
+}
+
+
+//Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
+etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint64_t srcPort, const uint64_t dstAddr, const uint64_t dstPort, bool doReturn)
+{
+    if(sock->type != ETCPSOCK_UK){
+        WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
+        return etcpEWRONGSOCK;
+    }
+
+    sock->type = ETCPSOCK_SR; //Set this socket to be a new send/recv socket
+
+    //Flip the soruce and destination addresses for the send mapping. This will be used for collecting the ACKs.
+    addConnMapping(sock,windowSize,buffSize,dstAddr,dstPort,srcAddr, srcPort,true);
+
+    //Most comms are two way, so return seems likely
+    if_likely(doReturn){
+        //Set up a mapping for the return connection (recv)
+        addConnMapping(sock,windowSize,buffSize,srcAddr,srcPort,dstAddr,dstPort,false);
     }
 
 
@@ -115,10 +241,10 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const 
 
     if(sock->type != ETCPSOCK_UK){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
-        return etcpWRONGSOCK;
+        return etcpEWRONGSOCK;
     }
 
-    etcpSrcsMap_t* const srcsMap = srcsMapNew(windowSize,buffSize);
+    etcpLAMap_t* const srcsMap = srcsMapNew(windowSize,buffSize);
     if_unlikely(!srcsMap){
         WARN("Ran out of memory making new sources connections container\n");
         return etcpENOMEM;
@@ -148,7 +274,7 @@ etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlog)
 
     if_unlikely(sock->type != ETCPSOCK_LA){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
-        return etcpWRONGSOCK;
+        return etcpEWRONGSOCK;
     }
 
     sock->la->listenQ = cqNew(sizeof(etcpConn_t*), backlog + 1);
@@ -166,48 +292,27 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
 {
     if_unlikely(listenSock->type != ETCPSOCK_LA){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_LA, listenSock->type);
-        return etcpWRONGSOCK;
+        return etcpEWRONGSOCK;
     }
 
     //if there is anything in the listen queue, then make a new socket and return it
     cq_t* listenQ = listenSock->la->listenQ;
     if_unlikely(listenQ == NULL){
         WARN("You need to do a listen on this socket before you can do an accept\n");
-        return etcpWRONGSOCK; //
+        return etcpEWRONGSOCK; //
     }
 
     if_unlikely(listenQ->rdSlotsUsed == 0){
         return etcpETRYAGAIN; //Nothing here to be collected. Come back another time
     }
 
-    etcpConn_t* conn;
     i64 len = sizeof(etcpConn_t*);
     i64 idx = -1;
-    cqError_t err = cqPullNext(listenSock->la->listenQ,&conn,&len,&idx);
+    cqError_t err = cqPullNext(listenSock->la->listenQ,acceptSock_o,&len,&idx);
     if_unlikely(err != cqENOERR){
         DBG("Unexpected error on cq %s\n", cqError2Str(err));
         return etcpECQERR;
     }
-
-//    //Move the connection out of the listen queue and into the fast path -- this should happen at connection startup
-//    ht_t* const srcTable = listenSock->la->srcTable;
-//    const htKey_t srcKey = {.keyHi = conn->flowId.srcAddr, .keyLo = conn->flowId.srcPort };
-//    htError_t htErr = htAddNew(srcTable,&srcKey,conn);
-//    if(htErr == htEALREADY){
-//        ERR("This connection is already connected\n");
-//        return etcpEALREADY;
-//    }
-
-    //By this point we have a valid value in conn. See if we can make a new send/receive socket for it
-    etcpSocket_t* acceptSock = etcpSocketNew(listenSock->etcpState);
-    if_unlikely(acceptSock == NULL){
-        WARN("Ran out of memory making new socket\n");
-        return etcpENOMEM;
-    }
-
-    acceptSock->type = ETCPSOCK_SR;
-    acceptSock->conn = conn;
-    *acceptSock_o = acceptSock;
 
     //Ok we're done with the entry in the cq
     err = cqReleaseSlotRd(listenQ,idx);
@@ -225,10 +330,10 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
 {
     if_unlikely(sock->type != ETCPSOCK_SR){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_SR, sock->type);
-        return etcpWRONGSOCK;
+        return etcpEWRONGSOCK;
     }
 
-    doEtcpUserTx(sock->conn,toSendData,toSendLen_io);
+    doEtcpUserTx(sock->sr.sendConn,toSendData,toSendLen_io);
 
     bool ackFirst = true;
     i64 maxAck = -1;
@@ -238,15 +343,15 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     if(sock->etcpState->eventTriggeredTx){
         sock->etcpState->etcpTxTc(
                 sock->etcpState->etcpTxTcState,
-                sock->conn->datTxQ,
-                sock->conn->ackTxQ,
-                sock->conn->ackTxQ,
+                sock->sr.sendConn->datTxQ,
+                sock->sr.sendConn->ackTxQ,
+                sock->sr.sendConn->ackTxQ,
                 &ackFirst,
                 &maxAck,
                 &maxDat);
     }
 
-    doEtcpNetTx(sock->conn,ackFirst,maxAck,maxDat);
+    doEtcpNetTx(sock->sr.sendConn,ackFirst,maxAck,maxDat);
 
     return etcpENOERR;
 }
@@ -257,18 +362,18 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
 {
     if_unlikely(sock->type != ETCPSOCK_SR){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_SR, sock->type);
-        return etcpWRONGSOCK;
+        return etcpEWRONGSOCK;
     }
 
     //If RX is event triggered then do it now, this is the event!
-    if(sock->conn->state->eventTriggeredRx){
-        doEtcpNetRx(sock->conn->state); //This is a generic RX function
+    if(sock->etcpState->eventTriggeredRx){
+        doEtcpNetRx(sock->etcpState); //This is a generic RX function
     }
 
-    const i64 maxAcks = sock->conn->state->etcpRxTc(sock->conn->state->etcpRxTcState, sock->conn->datRxQ, sock->conn->ackTxQ);
-    generateAcks(sock->conn,maxAcks);
+    const i64 maxAcks = sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->datRxQ, sock->sr.recvConn->ackTxQ);
+    generateAcks(sock->sr.recvConn,maxAcks);
 
-    doEtcpUserRx(sock->conn,data,len_io);
+    doEtcpUserRx(sock->sr.recvConn,data,len_io);
 
     return etcpENOERR;
 }
@@ -285,5 +390,97 @@ void etcpClose(etcpSocket_t* const sock)
     //Should do some shutdown things here, send a FIN message, clear out the buffers etc.
     //...
 
-    free(sock);
+    etcpSockeDelete(sock);
 }
+
+
+//This function gets triggered on an incoming packet that has not been recognised as beloging to an active connection.
+//It's job is to make a new socket structure and place that socket structure into the listening queue, ready for an accept to be called.
+etcpError_t addNewConn(etcpState_t* const state, etcpLAMap_t* const srcsMap, const etcpFlowId_t* const flowId, bool noRet, etcpConn_t** const connRecv_o, etcpConn_t** const connSend_o )
+{
+    //The connection has not been established with this source
+    //Check if there's space in the listening queue for another connection
+    cqSlot_t* slot = NULL;
+    i64 slotIdx = -1;
+    cqError_t cqErr = cqGetNextWr(srcsMap->listenQ, &slot,&slotIdx);
+    if_unlikely(cqErr == cqENOSLOT){
+        //No space for this connection, ignore it.
+        return etcpEREJCONN;
+    }
+    else if_unlikely(cqErr != cqENOERR){
+        ERR("Unexpected error getting a listening slot: %s\n", cqError2Str(cqErr));
+        return etcpEHTERR;
+    }
+
+    etcpError_t result = etcpENOERR;
+
+    //We've reserved a slot in the listen queue, so make a new read/write socket structure. This will become an accept socket in the future
+    etcpSocket_t* acceptSock = etcpSocketNew(state);
+    if_unlikely(acceptSock == NULL){
+        WARN("Ran out of memory making new socket\n");
+        result = etcpENOMEM;
+        goto failReleaseWr;
+    }
+
+
+    acceptSock->type = ETCPSOCK_SR;
+    etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->srcAddr, flowId->srcPort, flowId->dstAddr, flowId->dstPort,false);
+    if(err != etcpENOERR){
+        WARN("Could not add recv connection mapping\n");
+        result = err;
+        goto failDelSock;
+    }
+
+    //Does this connection need a return path? If so, set that up as well
+    //Only make a return connection if it is desired
+    const bool requireReturn = !noRet;
+    if_likely(!requireReturn){
+        //Flip the source and destination address so we can rcv acks here safely
+        etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->dstAddr, flowId->dstPort, flowId->srcAddr, flowId->srcPort,true);
+        if(err != etcpENOERR){
+            WARN("Could not add connection mapping\n");
+            result = err;
+            goto failRemRecvConn;
+        }
+    }
+
+    //We have a new s/r socket fully populated. Add it to the listening queue for accept to pickup
+    memcpy(slot->buff, &acceptSock, sizeof(etcpSocket_t*));
+
+
+    //Commit the new connection to the listening queue.
+    cqErr = cqCommitSlot(srcsMap->listenQ, slotIdx, sizeof(etcpConn_t*));
+    if_unlikely(cqErr != cqENOERR){
+        ERR("Unexpected cq error while trying to commit slot: %s\n", cqError2Str(cqErr));
+        result =  etcpECQERR;
+        goto failRemSendConn;
+    }
+
+    *connRecv_o = acceptSock->sr.recvConn;
+    *connSend_o = acceptSock->sr.sendConn;
+    return etcpENOERR;
+
+failRemSendConn:
+    DBG("Removing send connection\n");
+    etcpConnDelete(acceptSock->sr.sendConn);
+
+failRemRecvConn:
+    DBG("Removing send connection\n");
+    etcpConnDelete(acceptSock->sr.recvConn);
+
+failDelSock:
+    DBG("Deleting socket\n");
+    etcpSockeDelete(acceptSock);
+
+failReleaseWr:
+    DBG("Releasing listen slot\n");
+    cqErr = cqReleaseSlotWr(srcsMap->listenQ,slotIdx);
+    if_unlikely(cqErr != cqENOERR){
+        ERR("Unexpected cq error while trying to exit on ENOMEM: %s\n", cqError2Str(cqErr));
+        return etcpECQERR;
+    }
+    return result;
+
+}
+
+

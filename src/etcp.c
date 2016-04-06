@@ -31,69 +31,7 @@
 #include "etcp.h"
 
 #include "etcpState.h"
-
-static inline etcpError_t addNewConn(etcpSrcsMap_t* const srcsMap, const etcpFlowId_t* const flowId,  etcpConn_t** const conn_o )
-{
-    //The connection has not been established with this source
-
-    //Check if there's space in the listening queue for another connection
-    cqSlot_t* slot = NULL;
-    i64 slotIdx = -1;
-    cqError_t cqErr = cqGetNextWr(srcsMap->listenQ, &slot,&slotIdx);
-    if_unlikely(cqErr == cqENOSLOT){
-        //No space for this connection, ignore it.
-        return etcpEREJCONN;
-    }
-    else if_unlikely(cqErr != cqENOERR){
-        ERR("Unexpected error getting a listening slot: %s\n", cqError2Str(cqErr));
-        return etcpEHTERR;
-    }
-
-    //We've reserved a slot in the listen queue, so make a new connection, and add it to the srcsMap
-    etcpConn_t* const conn = etcpConnNew(srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->srcAddr, flowId->srcPort, flowId->dstAddr, flowId->dstPort);
-    if_unlikely(conn == NULL){
-        //Shit no memory for the connection, free the slot and exit
-        WARN("Ran out of memory trying to make a new connection\n");
-        cqErr = cqReleaseSlotWr(srcsMap->listenQ,slotIdx);
-        if_unlikely(cqErr != cqENOERR){
-            ERR("Unexpected cq error while trying to exit on ENOMEM: %s\n", cqError2Str(cqErr));
-            return etcpECQERR;
-        }
-        return etcpENOMEM;
-    }
-
-    //Now add the connection into the srcsMap so we can be on the fastpath in future
-    const htKey_t srcKey = { .keyHi = flowId->srcAddr, .keyLo = flowId->srcPort };
-    htError_t htErr = htAddNew(srcsMap->table,&srcKey,conn);
-    if_unlikely(htErr != htENOEROR){
-        cqReleaseSlotWr(srcsMap->listenQ,slotIdx);
-        //This should work because we just checked that the key was not in the table
-        ERR("Unexpected error inserting packet with source Add=%li, Port=%li\n", flowId->srcAddr, flowId->srcPort);
-        cqErr = cqReleaseSlotWr(srcsMap->listenQ,slotIdx);
-        if_unlikely(cqErr != cqENOERR){
-            ERR("Unexpected cq error while trying to exit on EHTERROR: %s\n", cqError2Str(cqErr));
-            return etcpECQERR;
-        }
-
-        return etcpEHTERR;
-    }
-
-    //We have a new connection, add it to the listening queue
-    memcpy(slot->buff, &conn, sizeof(etcpConn_t*));
-
-
-    //Commit the new connection to the listening queue.
-    cqErr = cqCommitSlot(srcsMap->listenQ, slotIdx, sizeof(etcpConn_t*));
-    if_unlikely(cqErr != cqENOERR){
-        ERR("Unexpected cq error while trying to commit slot: %s\n", cqError2Str(cqErr));
-        return etcpEFATAL;
-    }
-
-    *conn_o = conn;
-    return etcpENOERR;
-}
-
-
+#include "etcpSockApi.h"
 
 
 static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
@@ -118,10 +56,10 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
     //Find the source map for this packet
     const htKey_t dstKey = {.keyHi = flowId->dstAddr, .keyLo = flowId->dstPort };
-    etcpSrcsMap_t* srcsMap = NULL;
+    etcpLAMap_t* srcsMap = NULL;
     htError_t htErr = htGet(state->dstMap,&dstKey,(void**)&srcsMap);
     if_unlikely(htErr == htENOTFOUND){
-        DBG("Packet for unexpected. No one listening to Add=%li, Port=%li\n", flowId->dstAddr, flowId->dstPort);
+        DBG("Packet unexpected. No one listening to Add=%li, Port=%li\n", flowId->dstAddr, flowId->dstPort);
         return etcpEREJCONN;
     }
     else if_unlikely(htErr != htENOEROR){
@@ -130,11 +68,12 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     }
 
     //Someone is listening to this destination, but is this the connection already established? Try to get the connection
-    etcpConn_t* conn = NULL;
+    etcpConn_t* recvConn = NULL;
+    etcpConn_t* sendConn = NULL;
     const htKey_t srcKey = { .keyHi = flowId->srcAddr, .keyLo = flowId->srcPort };
-    htErr = htGet(srcsMap->table,&srcKey,(void**)&conn);
+    htErr = htGet(srcsMap->table,&srcKey,(void**)&recvConn);
     if(htErr == htENOTFOUND){
-        etcpError_t err = addNewConn(srcsMap, flowId, &conn);
+        etcpError_t err = addNewConn(state, srcsMap, flowId, datHdr->noRet, &recvConn, &sendConn);
         if_unlikely(err != etcpENOERR){
             DBG("Error trying to add new connection\n");
             return err;
@@ -143,10 +82,10 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
     //By this point, the connection structure should be properly populated one way or antoher
 
-    const i64 rxQSlotCount  = conn->datRxQ->slotCount;
+    const i64 rxQSlotCount  = recvConn->datRxQ->slotCount;
     const i64 seqPkt        = datHdr->seqNum;
-    const i64 seqMin        = conn->seqAck;
-    const i64 seqMax        = conn->seqAck + rxQSlotCount;
+    const i64 seqMin        = recvConn->seqAck;
+    const i64 seqMax        = recvConn->seqAck + rxQSlotCount;
     const i64 seqIdx        = seqPkt % rxQSlotCount;
     DBG("SlotCount = %li, seqPkt = %li, seqMin= %li, seqMax = %li, seqIdx = %li\n",
         rxQSlotCount,
@@ -171,7 +110,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
     i64 toCopy    = len; //By now this value has been checked to be right
     i64 toCopyTmp = toCopy;
-    cqError_t err = cqPushIdx(conn->datRxQ,head,&toCopyTmp,seqIdx);
+    cqError_t err = cqPushIdx(recvConn->datRxQ,head,&toCopyTmp,seqIdx);
     if_unlikely(err = cqENOSLOT){
         return etcpETRYAGAIN; //We've run out of slots to put packets into, drop this packet
     }
@@ -251,7 +190,7 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
 
     //Find the source map for this packet
     const htKey_t dstKey = {.keyHi = flowId->srcAddr, .keyLo = flowId->srcPort }; //Since this is an ack, we swap src / dst
-    etcpSrcsMap_t* srcsMap = NULL;
+    etcpLAMap_t* srcsMap = NULL;
     htError_t htErr = htGet(state->dstMap,&dstKey,(void**)&srcsMap);
     if_unlikely(htErr == htENOTFOUND){
         DBG("Ack unexpected. No one listening to destination addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
