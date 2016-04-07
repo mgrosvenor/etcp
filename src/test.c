@@ -11,6 +11,8 @@
 
 #include "src/etcpSockApi.h"
 #include "src/debug.h"
+#include "src/CircularQueue.h"
+#include "src/packets.h"
 
 
 
@@ -79,7 +81,7 @@ int etcptpTestClient()
 {
     //Open the connection
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpConnect(sock,16,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true);
+    etcpConnect(sock,16,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
 
     //Write to the connection
     i64 len = 128;
@@ -99,7 +101,7 @@ int etcptpTestServer()
 {
     //Open a socket and bind it
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpBind(sock,16,2048,0x000002,0x00000E);
+    etcpBind(sock,16,2048,0x000002,0x00000E, -1, -1);
 
     //Tell the socket to list
     etcpListen(sock,8);
@@ -159,7 +161,19 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, con
     (void)ackFirst;
     (void)maxAck_o;
     (void)maxDat_o;
-    DBG("TX TC Called!\n");
+    int i = 0;
+    for(; i < datTxQ->slotCount; i++){
+        cqSlot_t* slot = NULL;
+        cqError_t cqe = cqGetSlotIdx(datTxQ,&slot,i);
+        if(cqe != cqENOERR){
+            break;
+        }
+        pBuff_t* pbuff = slot->buff;
+        pbuff->txState = ETCP_TX_NOW;
+
+    }
+
+    *maxDat_o = i;
 }
 
 
@@ -171,6 +185,7 @@ static int64_t exanicTx(void* const hwState, const void* const data, const int64
 {
     exaNicState_t* const exaNicState = hwState;
 
+    hexdump(data,len);
     ssize_t result = exanic_transmit_frame(exaNicState->txBuff,(const char*)data, len);
     const uint32_t txTimeCyc = exanic_get_tx_timestamp(exaNicState->txBuff);
     *hwTxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, txTimeCyc);
@@ -185,6 +200,9 @@ static int64_t exanicRx(void* const hwState, void* const data, const int64_t len
     uint32_t rxTimeCyc = -1;
     ssize_t result = exanic_receive_frame(exaNicState->rxBuff, (char*)data, len, &rxTimeCyc);
     *hwRxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, rxTimeCyc);
+    if(result > 0){
+        hexdump(data,len);
+    }
     return result;
 }
 
@@ -194,7 +212,7 @@ static inline void exanicInit(exaNicState_t* const nicState, const char* exanicD
 {
     nicState->dev = exanic_acquire_handle(exanicDev);
     if(!nicState->dev ){
-        ERR("Could not get handle for device %s\n", exanicDev);
+        ERR("Could not get handle for device %s (%s)\n", exanicDev, exanic_get_last_error());
         return;
     }
 
@@ -202,7 +220,7 @@ static inline void exanicInit(exaNicState_t* const nicState, const char* exanicD
     const int rxBuffNo = 0;
     nicState->rxBuff = exanic_acquire_rx_buffer(nicState->dev, exanicPort, rxBuffNo);
     if(!nicState->rxBuff ){
-        ERR("Could not get handle for rx buffer %s:%i:%i\n", exanicDev, exanicPort, rxBuffNo);
+        ERR("Could not get handle for rx buffer %s:%i:%i (%s)\n", exanicDev, exanicPort, rxBuffNo, exanic_get_last_error());
         return;
     }
 
@@ -211,7 +229,7 @@ static inline void exanicInit(exaNicState_t* const nicState, const char* exanicD
     const int reqMult = 4;
     nicState->txBuff = exanic_acquire_tx_buffer(nicState->dev, exanicPort, reqMult * 4096);
     if(!nicState->dev ){
-        ERR("Could not get handle for tx buffer %s:%i:%i\n", exanicDev, exanicPort, txBuffNo);
+        ERR("Could not get handle for tx buffer %s:%i:%i (%s)\n", exanicDev, exanicPort, txBuffNo, exanic_get_last_error());
         return;
     }
 
@@ -228,18 +246,18 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    const char* const exanicDev = argv[2];
+    const int exanicPort = strtol(argv[3],NULL,10);
+
+    exanicInit(&nicState, exanicDev, exanicPort);
+    etcpState = etcpStateNew(&nicState,exanicTx,exanicRx,etcpTxTc,&tcState,true,etcpRxTc,&tcState,true);
+
     if(argv[1][0] == 's'){
         return etcptpTestServer();
     }
     else if(argv[1][0] == 'c'){
         return etcptpTestClient();
     }
-
-    const char* const exanicDev = argv[2];
-    const int exanicPort = strtol(argv[3],NULL,10);
-
-    exanicInit(&nicState, exanicDev, exanicPort);
-    etcpState = etcpStateNew(&nicState,exanicTx,exanicRx,etcpTxTc,&tcState,true,etcpRxTc,&tcState,true);
 
 
     return -1;

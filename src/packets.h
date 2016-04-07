@@ -10,6 +10,8 @@
 #ifndef SRC_PACKETS_H_
 #define SRC_PACKETS_H_
 
+#include <linux/if_ether.h>
+
 typedef struct __attribute__((packed)){
     //Note 1: Client and server times cannot be compared unless there is some kind of time synchronisation (eg PTP)
     //Note 2: Hardware cycle counts and software times cannot be compared unless there is time synchronisation and conversion
@@ -70,9 +72,9 @@ typedef struct __attribute__((packed)){
     union{
         struct{
             //Top 48 bits
-            uint64_t magic     :32;  //ASCII encoded "ETCP" -- To make hexdumps easier to parse
-            uint64_t ver       :8;  //Protocol version. Max 255 versions
             uint64_t type      :8; //256 different message types for each protocol version. How could we run out...?
+            uint64_t ver       :8;  //Protocol version. Max 255 versions
+            uint64_t magic     :32;  //ASCII encoded "ETCP" -- To make hexdumps easier to parse
 
             //Bottom 16 bits
             uint64_t hwTxTs    :1; //Does this packet have a harware TX timestamp in it?
@@ -129,7 +131,8 @@ typedef struct {
     txState_t txState;
 
     void* buffer;
-    i64 buffSize;
+    i64 buffSize; //Size of the buffer area to work in
+    i64 msgSize;  //Size of the final message
 
     void* encapHdr;
     i64 encapHdrSize;

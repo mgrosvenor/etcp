@@ -71,6 +71,8 @@ typedef struct etcpSrcsMap_s {
     //These are for new connections that happen when we're listening
     uint32_t listenWindowSize;
     uint32_t listenBuffSize;
+    i64 vlan;
+    i64 priority;
 
     cq_t* listenQ; //Queue containing connections that have not yet been accepted
 
@@ -98,7 +100,7 @@ etcpState_t* etcpStateNew(
     void* const etcpRxTcState,
     const bool eventTriggeredRx
 );
-etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize);
+etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize, const i64 vlan, const i64 priority);
 void srcsMapDelete(etcpLAMap_t* const srcConns);
 
 #endif /* SRC_ETCPSTATE_H_ */

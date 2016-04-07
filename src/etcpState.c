@@ -40,7 +40,7 @@ void srcsMapDelete(etcpLAMap_t* const srcConns)
 }
 
 
-etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize)
+etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenBuffSize, const i64 vlan, const i64 priority)
 {
     etcpLAMap_t* const srcConns = (etcpLAMap_t* const )calloc(1,sizeof(etcpLAMap_t));
     if_unlikely(!srcConns){
@@ -55,6 +55,8 @@ etcpLAMap_t* srcsMapNew( const uint32_t listenWindowSize, const uint32_t listenB
 
     srcConns->listenWindowSize = listenWindowSize;
     srcConns->listenBuffSize   = listenBuffSize;
+    srcConns->vlan             = vlan;
+    srcConns->priority         = priority;
 
     return srcConns;
 

@@ -41,7 +41,7 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCount)
     for(i64 i = 0; i < slotCount; i++){
         cqSlot_t* slot = (cqSlot_t*)(result->_slots + i * result->slotSize);
         slot->buff = (i8*)(slot + 1);
-        slot->len  = result->slotSize;
+        slot->len  = result->slotDataSize;
     }
 
     return result;
@@ -294,7 +294,7 @@ cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i
 }
 
 //Get a non empty slot
-cqError_t cqGetSlotIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
+cqError_t cqGetSlotIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
 {
 
     if(cq == NULL || slot_o == NULL){

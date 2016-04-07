@@ -52,7 +52,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         WARN("Data length has unexpected value. Expected %li, but got %li\n",datLen, datHdr->datLen);
         return etcpEBADPKT;
     }
-    DBG("Working on new data message with len = 0x%016x\n", datHdr->datLen);
+    DBG("Working on new data message with len = %li\n", datHdr->datLen);
 
     //Find the source map for this packet
     const htKey_t dstKey = {.keyHi = flowId->dstAddr, .keyLo = flowId->dstPort };
@@ -299,7 +299,7 @@ typedef struct __attribute__((packed)){
 //It expects that an out-of-band hardware timestamp is also passed in.
 static inline  etcpError_t etcpOnRxEthernetFrame(etcpState_t* const state, const void* const frame, const i64 len, i64 hwRxTimeNs)
 {
-    const i64 minSizeEHdr = sizeof(ETH_HLEN + ETH_FCS_LEN);
+    const i64 minSizeEHdr = ETH_HLEN + ETH_FCS_LEN;
        if_unlikely(len < minSizeEHdr){
            WARN("Not enough bytes to parse Ethernet header, expected at least %li but got %li\n", minSizeEHdr, len);
            return etcpEBADPKT; //Bad packet, not enough data in it
@@ -345,6 +345,9 @@ static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, cons
     memcpy(&ethHdr->h_dest, &dstAddr, ETH_ALEN);
     memcpy(&ethHdr->h_source, &srcAddr, ETH_ALEN);
     ethHdr->h_proto = htons(ETH_P_ECTP);
+
+    DBG("Ethernet header:\n");
+    hexdump(ethHdr,ETH_HLEN);
 
     if_eqlikely(vlan < 0){
         //No VLAN tag header, we're done!
@@ -615,7 +618,8 @@ static inline etcpError_t txRing(cq_t* const cq, i64* const lastTxIdx_io, const 
         }
 
         uint64_t hwTxTimeNs = 0;
-        if_unlikely(state->ethHwTx(state->ethHwState,slot->buff, slot->len, &hwTxTimeNs) < 0){
+        const pBuff_t* const pbuff = slot->buff;
+        if_unlikely(state->ethHwTx(state->ethHwState, pBuff->buffer, pbuff->msgSize, &hwTxTimeNs) < 0){
             return etcpETRYAGAIN;
         }
         hwTxCount++;
@@ -769,6 +773,7 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         pBuff_t* pBuff  = slot->buff;
         pBuff->buffer   = pBuff + 1;
         pBuff->buffSize = slot->len - sizeof(pBuff);
+        pBuff->msgSize  = 0;
 
         i8* buff    = pBuff->buffer;
         i64 buffLen = pBuff->buffSize;
@@ -779,10 +784,11 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
             WARN("Could not format Ethernet packet\n");
             return etcpErr;
         }
-        pBuff->encapHdr = buff;
+        pBuff->encapHdr     = buff;
         pBuff->encapHdrSize = ethLen;
-        buff += ethLen;
-        buffLen -= ethLen;
+        buff               += ethLen;
+        pBuff->msgSize     += ethLen;
+        buffLen            -= ethLen;
 
         const i64 hdrsLen = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
         if_unlikely(buffLen < hdrsLen + 1){ //Should be able to send at least 1 byte!
@@ -791,6 +797,7 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         }
         const i64 datSpace = buffLen - hdrsLen;
         const i64 datLen   = MIN(datSpace,toSendLen);
+        pBuff->msgSize    += hdrsLen;
 
         struct timespec ts = {0};
         clock_gettime(CLOCK_REALTIME,&ts);
@@ -803,13 +810,13 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         head->dstPort       = conn->flowId.dstPort;
         head->ts.swTxTimeNs = ts.tv_nsec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
-
         etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
-        pBuff->etcpDatHdr = datHdr;
+        pBuff->etcpDatHdr     = datHdr;
         pBuff->etcpDatHdrSize = sizeof(etcpMsgDatHdr_t);
 
 
         datHdr->datLen     = datLen;
+        pBuff->msgSize    += datLen;
         datHdr->seqNum     = conn->seqSnd;
         datHdr->txAttempts = 0;
 

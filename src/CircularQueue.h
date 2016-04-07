@@ -166,7 +166,7 @@ cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i
  * @param slotIdx
  * @return
  */
-cqError_t cqGetSlotIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx);
+cqError_t cqGetSlotIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx);
 
 /**
  * Free memory resoruces associated with this CQ

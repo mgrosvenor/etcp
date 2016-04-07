@@ -151,7 +151,7 @@ etcpError_t remConnMapping(etcpSocket_t* const sock, const uint64_t srcAddr, con
 
 
 
-etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort, bool isSender)
+etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort, const bool isSender, const i64 vlan, const i64 prioirty)
 {
     if_unlikely(sock->type != ETCPSOCK_SR){
         WARN("Wrong socket type supplied\n");
@@ -161,12 +161,12 @@ etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, 
     etcpState_t* const state = sock->etcpState;
     ht_t* const dstMap = state->dstMap;
 
-    htKey_t dstKey = {.keyHi = dstAddr, .keyLo = dstPort }; //Flip the SRC/DST around so they match the listener side
+    htKey_t dstKey = {.keyHi = dstAddr, .keyLo = dstPort };
     etcpLAMap_t* srcsMap = NULL;
     //First check if this destination is in our destinations map, if not, add a new sources map, based on this destination
     htError_t htErr = htGet(dstMap,&dstKey,(void**)&srcsMap);
     if_eqlikely(htErr == htENOTFOUND){
-        srcsMap = srcsMapNew(0,0); //Listen window/buff size = 0 because we are not listening.
+        srcsMap = srcsMapNew(0,0,vlan,prioirty); //Listen window/buff size = 0 because we are not listening.
         if_unlikely(!srcsMap){
             WARN("Ran out of memory making new sources connections container\n");
             return etcpENOMEM;
@@ -180,7 +180,7 @@ etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, 
     }
 
     //We have a sources map for this destination. Make a new connection structure
-    etcpConn_t* const conn = etcpConnNew(sock->etcpState, windowSize,buffSize,srcAddr,srcPort, dstAddr,dstPort);
+    etcpConn_t* const conn = etcpConnNew(sock->etcpState, windowSize,buffSize,srcAddr,srcPort, dstAddr,dstPort, vlan, prioirty);
     if_unlikely(conn == NULL){
         WARN("Ran out of memory trying to make a new connection\n");
         return etcpENOMEM;
@@ -189,9 +189,9 @@ etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, 
     //Now add the connection into the sources map
     //This should probably be made thread safe??
     ht_t* const srcsTable = srcsMap->table;
-    htKey_t srcKey = {.keyHi = srcAddr, .keyLo = srcPort }; //Flip the SRC/DST around so they match the listener side    ;
+    htKey_t srcKey = {.keyHi = srcAddr, .keyLo = srcPort };
     htErr = htAddNew(srcsTable,&srcKey,conn);
-    if_unlikely(htErr == htENOEROR){
+    if_unlikely(htErr != htENOEROR){
         WARN("Trying to setup an exisiting connection\n");
         //We're already connected using the same source and destination ports!
         //Clean up the mess
@@ -213,7 +213,7 @@ etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, 
 
 
 //Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
-etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint64_t srcPort, const uint64_t dstAddr, const uint64_t dstPort, bool doReturn)
+etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint64_t srcPort, const uint64_t dstAddr, const uint64_t dstPort, const bool doReturn, const i64 vlan, const i64 priority)
 {
     if(sock->type != ETCPSOCK_UK){
         WARN("Wrong socket type, expected %li but got %li\n", ETCPSOCK_UK, sock->type);
@@ -222,13 +222,13 @@ etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, con
 
     sock->type = ETCPSOCK_SR; //Set this socket to be a new send/recv socket
 
-    //Flip the soruce and destination addresses for the send mapping. This will be used for collecting the ACKs.
-    addConnMapping(sock,windowSize,buffSize,dstAddr,dstPort,srcAddr, srcPort,true);
+    addConnMapping(sock,windowSize,buffSize,srcAddr,srcPort,dstAddr,dstPort,true, vlan, priority);
+
 
     //Most comms are two way, so return seems likely
     if_likely(doReturn){
         //Set up a mapping for the return connection (recv)
-        addConnMapping(sock,windowSize,buffSize,srcAddr,srcPort,dstAddr,dstPort,false);
+        addConnMapping(sock,windowSize,buffSize,dstAddr,dstPort,srcAddr, srcPort,false, vlan, priority);
     }
 
 
@@ -236,7 +236,7 @@ etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, con
 }
 
 //Set the socket to have an inbound address.
-etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t dstAddr, const uint32_t dstPort)
+etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t dstAddr, const uint32_t dstPort, const i64 vlan, const i64 priority)
 {
 
     if(sock->type != ETCPSOCK_UK){
@@ -244,7 +244,7 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const 
         return etcpEWRONGSOCK;
     }
 
-    etcpLAMap_t* const srcsMap = srcsMapNew(windowSize,buffSize);
+    etcpLAMap_t* const srcsMap = srcsMapNew(windowSize,buffSize,vlan,priority);
     if_unlikely(!srcsMap){
         WARN("Ran out of memory making new sources connections container\n");
         return etcpENOMEM;
@@ -300,6 +300,11 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
     if_unlikely(listenQ == NULL){
         WARN("You need to do a listen on this socket before you can do an accept\n");
         return etcpEWRONGSOCK; //
+    }
+
+    //If RX is event triggered then do it now, this is the event!
+    if_eqlikely(listenSock->etcpState->eventTriggeredRx){
+        doEtcpNetRx(listenSock->etcpState); //This is a generic RX function
     }
 
     if_unlikely(listenQ->rdSlotsUsed == 0){
@@ -424,7 +429,7 @@ etcpError_t addNewConn(etcpState_t* const state, etcpLAMap_t* const srcsMap, con
 
 
     acceptSock->type = ETCPSOCK_SR;
-    etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->srcAddr, flowId->srcPort, flowId->dstAddr, flowId->dstPort,false);
+    etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->srcAddr, flowId->srcPort, flowId->dstAddr, flowId->dstPort,false, srcsMap->vlan, srcsMap->priority);
     if(err != etcpENOERR){
         WARN("Could not add recv connection mapping\n");
         result = err;
@@ -436,7 +441,7 @@ etcpError_t addNewConn(etcpState_t* const state, etcpLAMap_t* const srcsMap, con
     const bool requireReturn = !noRet;
     if_likely(!requireReturn){
         //Flip the source and destination address so we can rcv acks here safely
-        etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->dstAddr, flowId->dstPort, flowId->srcAddr, flowId->srcPort,true);
+        etcpError_t err = addConnMapping(acceptSock,srcsMap->listenWindowSize, srcsMap->listenBuffSize, flowId->dstAddr, flowId->dstPort, flowId->srcAddr, flowId->srcPort,true, -1, 01);
         if(err != etcpENOERR){
             WARN("Could not add connection mapping\n");
             result = err;

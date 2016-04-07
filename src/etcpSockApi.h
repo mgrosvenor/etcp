@@ -26,10 +26,10 @@ etcpSocket_t* etcpSocketNew(etcpState_t* const etcpState);
 void etcpSockeDelete(etcpSocket_t* const sock);
 
 //Set the socket to have an outbound address. Etcp does not have a connection setup phase, so you can immediately send/recv directly on this socket
-etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint64_t srcPort, const uint64_t dstAddr, const uint64_t dstPort, bool doReturn);
+etcpError_t etcpConnect(etcpSocket_t* const sock, const uint32_t windowSize, const uint64_t buffSize, const uint64_t srcAddr, const uint64_t srcPort, const uint64_t dstAddr, const uint64_t dstPort, const bool doReturn, const i64 vlan, const i64 priority);
 
 //Set the socket to have an inbound address.
-etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t dstAddr, const uint32_t dstPort);
+etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSize, const uint32_t buffSize, const uint64_t dstAddr, const uint32_t dstPort, const i64 vlan, const i64 priority);
 
 //Tell the socket to start accepting connections. Backlog sets the length of the queue for unaccepted connections
 etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlog);

@@ -31,7 +31,7 @@ void etcpConnDelete(etcpConn_t* const conn)
 }
 
 
-etcpConn_t* etcpConnNew(etcpState_t* const state, const i64 windowSize, const i32 buffSize, const uint32_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort)
+etcpConn_t* etcpConnNew(etcpState_t* const state, const i64 windowSize, const i32 buffSize, const uint32_t srcAddr, const uint32_t srcPort, const uint64_t dstAddr, const uint32_t dstPort, const i64 vlan, const i64 priority)
 {
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     if_unlikely(!conn){ return NULL; }
@@ -66,6 +66,9 @@ etcpConn_t* etcpConnNew(etcpState_t* const state, const i64 windowSize, const i3
     conn->flowId.dstPort = dstPort;
 
     conn->state = state;
+
+    conn->vlan     = vlan;
+    conn->priority = priority;
 
     return conn;
 }
