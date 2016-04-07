@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <exanic/exanic.h>
 #include <exanic/fifo_rx.h>
@@ -14,53 +15,6 @@
 #include "src/CircularQueue.h"
 #include "src/packets.h"
 
-
-
-//
-//
-//static i64 connect_(int fd, const struct sockaddr *address,socklen_t address_len)
-//{
-//
-//}
-//
-//u64 etcp_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
-//{
-//
-//}
-//
-//
-//u64 etcp_listen(int __fd, int __n)
-//{
-//
-//}
-//
-//u64 etcp_accept(int __fd, __SOCKADDR_ARG __addr, socklen_t *__restrict __addr_len)
-//{
-//
-//}
-//
-//u64 etcp_sendto(int __fd, const void *__buf, size_t __n, int __flags)
-//{
-//
-//}
-//
-//
-//
-//u64 etcp_send(int __fd, const void *__buf, size_t __n, int __flags)
-//{
-//
-//}
-//
-//
-//
-//u64 etcp_recv(int __fd, void *__buf, size_t __n, int __flags)
-//{
-//
-//}
-//u64 etcp_close(int __fd)
-//{
-//
-//}
 
 static etcpState_t* etcpState = NULL;
 
@@ -117,9 +71,9 @@ int etcptpTestServer()
     }
 
     i8 data[128] = {0};
-    i64 len = -1;
+    i64 len = 128;
     etcpError_t recvErr = etcpETRYAGAIN;
-    for(recvErr = etcpETRYAGAIN; recvErr == etcpETRYAGAIN; recvErr = etcpRecv(sock,&data,&len)){
+    for(recvErr = etcpETRYAGAIN; recvErr == etcpETRYAGAIN; recvErr = etcpRecv(accSock,&data,&len)){
         sleep(1);
     }
 
@@ -131,7 +85,7 @@ int etcptpTestServer()
 
     DBG("Success!\n");
     for(int i = 0; i < 128; i++){
-        printf("%i 0x%02x\n", i, data[i]);
+        printf("%i 0x%02x\n", i, (uint8_t)data[i]);
     }
 
     //Close the connection
@@ -196,13 +150,30 @@ static int64_t exanicTx(void* const hwState, const void* const data, const int64
 //Returns: >0, number of bytes received, =0, nothing available right now, <0 hw specific error code
 static int64_t exanicRx(void* const hwState, void* const data, const int64_t len, uint64_t* const hwRxTimeNs )
 {
-    exaNicState_t* const exaNicState = hwState;
-    uint32_t rxTimeCyc = -1;
-    ssize_t result = exanic_receive_frame(exaNicState->rxBuff, (char*)data, len, &rxTimeCyc);
-    *hwRxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, rxTimeCyc);
-    if(result > 0){
-        hexdump(data,len);
-    }
+    (void)hwState;
+    (void)len;
+
+
+//    exaNicState_t* const exaNicState = hwState;
+//    uint32_t rxTimeCyc = -1;
+
+//    ssize_t result = exanic_receive_frame(exaNicState->rxBuff, (char*)data, len, &rxTimeCyc);
+//    *hwRxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, rxTimeCyc);
+    *hwRxTimeNs = -1;
+    char frame[218] = "\x02\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x88\x88\x03\x01\x50\x43\x54\x45\x04\x00\x0f\x00\x00\x00\x00\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x49\x87\x63\xed\x99\x2b\x43\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80\x00\x00\x00\x00\x00\x00\x00\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x3f\xd1\x7c\xa9";
+    memcpy(data,frame,218);
+    ssize_t result = 218;
+
+//    if(result > 0){
+//        //hexdump(data,result);
+//        printf("Dumping packet state\n");
+//        printf("\n\nchar frame[%li] = {",result);
+//        for(int i = 0; i < result; i++){
+//            printf("\\x%02x",((uint8_t*)data)[i]);
+//        }
+//        printf("};\n");
+//        printf("Done dumping state\n");
+//    }
     return result;
 }
 

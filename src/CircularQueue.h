@@ -37,8 +37,7 @@ typedef struct {
     i64 slotSize;
     i64 slotDataSize;
     i64 slotCount;
-    i64 rdSlotsUsed;
-    i64 wrSlotsUsed;
+    i64 slotsUsed;
     i64 _rdIdx;
     i64 _wrIdx;
     i8* _slots;

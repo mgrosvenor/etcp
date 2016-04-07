@@ -111,7 +111,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     i64 toCopy    = len; //By now this value has been checked to be right
     i64 toCopyTmp = toCopy;
     cqError_t err = cqPushIdx(recvConn->datRxQ,head,&toCopyTmp,seqIdx);
-    if_unlikely(err = cqENOSLOT){
+    if_unlikely(err == cqENOSLOT){
         return etcpETRYAGAIN; //We've run out of slots to put packets into, drop this packet
     }
     else if_unlikely(err == cqETRUNC){
@@ -121,6 +121,8 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         WARN("Error inserting into Circular Queue: %s", cqError2Str(err));
         return etcpECQERR;
     }
+
+    cqCommitSlot(recvConn->datRxQ,seqIdx,toCopyTmp);
 
     return etcpENOERR;
 }
@@ -462,7 +464,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
 
         //We collected enough sack fields to make a whole packet and send it
         if_unlikely(fieldIdx >= ETCP_MAX_SACKS){
-            sackHdr->rxWindowSegs = conn->datRxQ->slotCount - conn->datRxQ->wrSlotsUsed; //Get the most up-to-date value
+            sackHdr->rxWindowSegs = conn->datRxQ->slotCount - conn->datRxQ->slotsUsed; //Get the most up-to-date value
             sackHdr->sackBaseSeq  = conn->seqAck;
             etcpError_t err = pushSackEthPacket(conn,tmpBuff,ETCP_MAX_SACKS);
             if_unlikely(err == etcpETRYAGAIN){
@@ -491,7 +493,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
 
         DBG("Now looking at slot %i\n", slotIdx);
         cqSlot_t* slot = NULL;
-        const cqError_t err = cqGetSlotIdx(conn->ackTxQ,&slot,slotIdx);
+        const cqError_t err = cqGetSlotIdx(conn->datRxQ,&slot,slotIdx);
 
         //This slot is empty, so stop making the field and start a new one
         if_eqlikely(err == cqEWRONGSLOT){
@@ -508,9 +510,10 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
         }
 
         //We've now got a valid slot with a packet in it, grab the timestamp to see if it needs sending.
-        const i64 skipEthHdrOffset          = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + sizeof(eth8021qTCI_t);
+        //const i64 skipEthHdrOffset          = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + sizeof(eth8021qTCI_t);
         const i8* const slotBuff            = slot->buff;
-        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff + skipEthHdrOffset);
+        //const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff + skipEthHdrOffset);
+        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
         etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
 
         if_eqlikely(datHdr->noAck){
@@ -540,7 +543,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
 
     //Push the last sack out
     if(unsentAcks > 0){
-        const i64 sackHdrAndDatSize = sizeof(sackHdr) + sizeof(sackFields) * (fieldIdx+1);
+        const i64 sackHdrAndDatSize = sizeof(etcpMsgSackHdr_t) + sizeof(etcpSackField_t) * (fieldIdx+1);
         etcpError_t err = pushSackEthPacket(conn,tmpBuff,sackHdrAndDatSize);
         if_unlikely(err == etcpETRYAGAIN){
             WARN("Ran out of slots for sending acks, come back again\n");
@@ -709,32 +712,46 @@ void doEtcpNetRx(etcpState_t* state)
 //This is a user facing function
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
 {
-    const i64 rxLen = *len_io;
     while(1){
         i64 slotIdx = -1;
-        cqError_t cqErr = cqPullNext(conn->datRxQ,data,len_io,&slotIdx);
+        cqSlot_t* slot;
+        cqError_t cqErr = cqGetNextRd(conn->datRxQ,&slot,&slotIdx);
         if_unlikely(cqErr == cqENOSLOT){
             //Nothing here. Give up
             return etcpETRYAGAIN;
         }
-        else if_unlikely( cqErr == cqETRUNC){
-            WARN("Payload truncated from %li to %li\n", rxLen, *len_io);
-        }
-        else{
+        else if_unlikely(cqErr != cqENOERR){
             ERR("Error on circular buffer: %s\n", cqError2Str(cqErr));
             return etcpECQERR;
         }
 
-        //We have a valid packet, but it might be stale, or not yet ack'd
-        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(data);
+        const i64 msgHdrs = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
+        if_unlikely(slot->len < msgHdrs){
+            ERR("Packet too small for headers %li < %li\n", slot->len, msgHdrs );
+            cqReleaseSlotRd(conn->datRxQ,slotIdx);
+            return etcpEBADPKT;
+        }
+
+        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slot->buff);
         const etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head +1);
+        if_unlikely(slot->len - msgHdrs < datHdr->datLen){
+            ERR("Packet too small for payload, required %li but got %li", datHdr->datLen,slot->len - msgHdrs );
+            return etcpEBADPKT;
+        }
+
+        //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){
             return etcpETRYAGAIN; //Ack has not yet been made for this, cannot give over to the user until it has
         }
 
+        const i8* dat = (i8*)(datHdr + 1);
+
+        //Looks ok, give the data over to the user
+        memcpy(data,dat,MIN(datHdr->datLen,*len_io));
+
         cqReleaseSlotRd(conn->datRxQ,slotIdx);
         if(datHdr->staleDat){
-            continue; //The packet is stale, so relase it, but get another one
+            continue; //The packet is stale, so release it, but get another one
         }
 
         //We've copied a valid packet and released it, the user can have it now

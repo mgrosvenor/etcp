@@ -134,7 +134,7 @@ etcpError_t remConnMapping(etcpSocket_t* const sock, const uint64_t srcAddr, con
     etcpConnDelete(conn);
 
     //If the srcmap is empty (except for this entry), get rid of it too
-    if_eqlikely(srcsMap->listenQ->wrSlotsUsed == 1){
+    if_eqlikely(srcsMap->listenQ->slotsUsed == 1){
         srcsMapDelete(srcsMap);
 
         //And remove it from the destination map
@@ -307,7 +307,7 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
         doEtcpNetRx(listenSock->etcpState); //This is a generic RX function
     }
 
-    if_unlikely(listenQ->rdSlotsUsed == 0){
+    if_unlikely(listenQ->slotsUsed == 0){
         return etcpETRYAGAIN; //Nothing here to be collected. Come back another time
     }
 

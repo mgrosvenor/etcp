@@ -67,7 +67,6 @@ cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotId
     __asm__ __volatile__ ("mfence"); //Atomically commit the new state
 
     cq->_wrIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-    cq->wrSlotsUsed++;
     //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
     *slotIdx_o = idx;
     *slot_o = slot;
@@ -98,7 +97,6 @@ cqError_t cqGetWrIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
     __asm__ __volatile__ ("mfence"); //Atomically commit the new state
 
 
-    cq->wrSlotsUsed++;
     //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
     *slot_o = slot;
     return cqENOERR;
@@ -127,7 +125,6 @@ cqError_t cqReleaseSlotWr(cq_t* const cq, const i64 slotIdx)
 
     //Set this to the current index, since it's now free, it's guaranteed to be writable in the future.
     cq->_wrIdx = slotIdx;
-    cq->wrSlotsUsed--;
 
     return cqENOERR;
 }
@@ -211,7 +208,7 @@ cqError_t cqCommitSlot(cq_t* const cq, const i64 slotIdx, const i64 len)
     slot->__state = cqSTREADY; //Attomically commit this state
     __asm__ __volatile__ ("mfence");
 
-    cq->wrSlotsUsed--;
+    cq->slotsUsed++;
     return cqENOERR;
 }
 
@@ -236,7 +233,6 @@ cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotId
     __asm__ __volatile__ ("mfence");
 
     cq->_rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-    cq->rdSlotsUsed++;
 
     *slotIdx_o = idx;
     *slot_o = slot;
@@ -263,7 +259,7 @@ cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx)
     slot->__state = cqSTFREE;
     __asm__ __volatile__ ("mfence");
 
-    cq->rdSlotsUsed--;
+    cq->slotsUsed--;
 
     return cqENOERR;
 }
