@@ -23,7 +23,7 @@
 INCLUDES="-I src -I ."
 CFLAGS="-D_GNU_SOURCE -D_XOPEN_SOURCE=700 -D_BSD_SOURCE -std=c11 -Werror -Wall -Wextra -pedantic -Wno-missing-field-initializers -Wno-unused-command-line-argument -Wno-missing-braces "
 #CFLAGS="-std=c11 -Werror -Wall -Wextra -pedantic -Wno-missing-field-initializers"
-LINKFLAGS=""
+LINKFLAGS="-lexanic"
 
 SRC="src/test.c"
 cake $SRC \

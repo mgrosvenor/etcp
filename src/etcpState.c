@@ -83,16 +83,32 @@ void deleteEtcpState(etcpState_t* etcpState)
 }
 
 
-etcpState_t* etcpStateNew(void* const ethHwState, const ethHwTx_f ethHwTx, const ethHwRx_f ethHwRx)
+etcpState_t* etcpStateNew(
+    void* const ethHwState,
+    const ethHwTx_f ethHwTx,
+    const ethHwRx_f ethHwRx,
+    const etcpTxTc_f etcpTxTc,
+    void* const etcpTxTcState,
+    const bool eventTriggeredTx,
+    const etcpRxTc_f etcpRxTc,
+    void* const etcpRxTcState,
+    const bool eventTriggeredRx
+)
 {
     etcpState_t* etcpState = calloc(1,sizeof(etcpState_t));
     if_unlikely(!etcpState){
         return NULL;
     }
 
-    etcpState->ethHwRx    = ethHwRx;
-    etcpState->ethHwTx    = ethHwTx;
-    etcpState->ethHwState = ethHwState;
+    etcpState->ethHwRx          = ethHwRx;
+    etcpState->ethHwTx          = ethHwTx;
+    etcpState->ethHwState       = ethHwState;
+    etcpState->etcpTxTc         = etcpTxTc;
+    etcpState->etcpTxTcState    = etcpTxTcState;
+    etcpState->eventTriggeredTx = eventTriggeredTx;
+    etcpState->etcpRxTc         = etcpRxTc;
+    etcpState->etcpRxTcState    = etcpRxTcState;
+    etcpState->eventTriggeredRx = eventTriggeredRx;
 
 
     etcpState->dstMap = htNew(DST_TAB_MAX_LOG2);
