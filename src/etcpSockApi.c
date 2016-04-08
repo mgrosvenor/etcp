@@ -419,9 +419,7 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
         generateAcks(sock->sr.recvConn,maxAckPkts, maxAckSlots);
     }
 
-    doEtcpUserRx(sock->sr.recvConn,data,len_io);
-
-    return etcpENOERR;
+    return doEtcpUserRx(sock->sr.recvConn,data,len_io);
 }
 
 

@@ -290,7 +290,7 @@ cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i
 }
 
 //Get a non empty slot
-cqError_t cqGetSlotIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
+cqError_t cqGetRdIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
 {
 
     if(cq == NULL || slot_o == NULL){

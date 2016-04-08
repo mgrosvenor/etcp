@@ -73,7 +73,7 @@ int etcptpTestServer()
         sleep(1);
     }
     if(accErr != etcpENOERR){
-        ERR("Something borke on accept!\n");
+        ERR("Something broke on accept!\n");
         return -1;
     }
 
@@ -120,7 +120,7 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const
     int i = 0;
     for(; i < datRxQ->slotCount; i++){
         cqSlot_t* slot = NULL;
-        cqError_t cqe = cqGetSlotIdx(ackTxQ,&slot,i);
+        cqError_t cqe = cqGetRdIdx(datRxQ,&slot,i);
         if(cqe != cqENOERR){
             break;
         }
@@ -160,7 +160,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     if(ackTxQ){
         for(; i < ackTxQ->slotCount; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGetSlotIdx(ackTxQ,&slot,i);
+            cqError_t cqe = cqGetRdIdx(ackTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }
@@ -178,10 +178,11 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
+    i = 0;
     if(datTxQ){
         for(i=0; i < datTxQ->slotCount; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGetSlotIdx(datTxQ,&slot,i);
+            cqError_t cqe = cqGetRdIdx(datTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }
@@ -253,12 +254,12 @@ static int64_t exanicRx(void* const hwState, void* const data, const int64_t len
 
 
 
-static inline void exanicInit(exaNicState_t* const nicState, const char* exanicDev, const int exanicPort)
+static inline i64 exanicInit(exaNicState_t* const nicState, const char* exanicDev, const int exanicPort)
 {
     nicState->dev = exanic_acquire_handle(exanicDev);
     if(!nicState->dev ){
         ERR("Could not get handle for device %s (%s)\n", exanicDev, exanic_get_last_error());
-        return;
+        return -1;
     }
 
 
@@ -266,7 +267,7 @@ static inline void exanicInit(exaNicState_t* const nicState, const char* exanicD
     nicState->rxBuff = exanic_acquire_rx_buffer(nicState->dev, exanicPort, rxBuffNo);
     if(!nicState->rxBuff ){
         ERR("Could not get handle for rx buffer %s:%i:%i (%s)\n", exanicDev, exanicPort, rxBuffNo, exanic_get_last_error());
-        return;
+        return -1;
     }
 
 
@@ -275,8 +276,10 @@ static inline void exanicInit(exaNicState_t* const nicState, const char* exanicD
     nicState->txBuff = exanic_acquire_tx_buffer(nicState->dev, exanicPort, reqMult * 4096);
     if(!nicState->dev ){
         ERR("Could not get handle for tx buffer %s:%i:%i (%s)\n", exanicDev, exanicPort, txBuffNo, exanic_get_last_error());
-        return;
+        return -1;
     }
+
+    return 0;
 
 }
 
@@ -294,7 +297,10 @@ int main(int argc, char* argv[])
     const char* const exanicDev = argv[2];
     const int exanicPort = strtol(argv[3],NULL,10);
 
-    exanicInit(&nicState, exanicDev, exanicPort);
+    if(exanicInit(&nicState, exanicDev, exanicPort)){
+        ERR("Could not connect to exanic\n");
+        return -1;
+    }
     etcpState = etcpStateNew(&nicState,exanicTx,exanicRx,etcpTxTc,&tcState,true,etcpRxTc,&tcState,true);
 
     if(argv[1][0] == 's'){

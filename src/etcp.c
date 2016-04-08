@@ -132,7 +132,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
     const uint64_t idx = seq % cq->slotCount;
     DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
     cqSlot_t* slot = NULL;
-    const cqError_t err = cqGetSlotIdx(cq,&slot,idx);
+    const cqError_t err = cqGetRdIdx(cq,&slot,idx);
     if_unlikely(err == cqEWRONGSLOT){
         WARN("Got an ACK for a packet that's gone.\n");
         return etcpENOERR;
@@ -142,8 +142,9 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
         return etcpECQERR;
     }
 
-    const etcpMsgHead_t* const head = slot->buff;
-    const etcpMsgDatHdr_t* const datHdr = (const etcpMsgDatHdr_t* const)(head + 1);
+    const pBuff_t* pbuff = slot->buff;
+    const etcpMsgHead_t* const head = pbuff->etcpHdr;
+    const etcpMsgDatHdr_t* const datHdr = pbuff->etcpDatHdr;
     if_unlikely(seq != datHdr->seqNum){
         WARN("Got an ACK for a packet that's gone.\n");
         return etcpENOERR;
@@ -164,7 +165,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
     //Packet is now ack'd, we can release this slot and use it for another TX
     const cqError_t cqErr = cqReleaseSlotRd(cq,idx);
     if_unlikely(cqErr != cqENOERR){
-        ERR("Unexpected cq error: %s\n", cqError2Str(err));
+        ERR("Unexpected cq error: %s\n", cqError2Str(cqErr));
         return etcpECQERR;
     }
     return etcpENOERR;
@@ -206,10 +207,10 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
 
     //Someone is listening to this destination, but is there also someone listening to the source?
     etcpConn_t* conn = NULL;
-    const htKey_t srcKey = { .keyHi = flowId->srcAddr, .keyLo = flowId->srcPort };
+    const htKey_t srcKey = { .keyHi = flowId->dstAddr, .keyLo = flowId->dstPort }; //Flip these for an ack packet
     htErr = htGet(srcsMap->table,&srcKey,(void**)&conn);
     if_unlikely(htErr == htENOTFOUND){
-        DBG("Ack unexpected. No one listening to source addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
+        DBG("Ack unexpected. No one listening to source addr=%li, port=%li\n", flowId->dstAddr, flowId->dstPort);
         return etcpEREJCONN;
     }
     else if_unlikely(htErr != htENOEROR){
@@ -389,7 +390,8 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
     i8* buff = pBuff->buffer;
     i64 buffLen = pBuff->buffSize;
     const i64 sackHdrAndDatSize = sizeof(etcpMsgSackHdr_t) + sizeof(etcpSackField_t) * sackCount;
-    const i64 ethEtcpSackPktSize = ETCP_ETH_OVERHEAD + sizeof(etcpMsgHead_t) + sackHdrAndDatSize;
+    const i64 ethOverhead       = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + 2; //Include vlan space if nedded!
+    const i64 ethEtcpSackPktSize = ethOverhead + sizeof(etcpMsgHead_t) + sackHdrAndDatSize;
     if_unlikely(buffLen < ethEtcpSackPktSize){
         ERR("Slot length is too small for sack packet need %li but only got %li!",ethEtcpSackPktSize, buffLen );
     }
@@ -404,6 +406,7 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
     pBuff->encapHdr = buff;
     pBuff->encapHdrSize = ethLen;
     buff += ethLen;
+    pBuff->msgSize += pBuff->encapHdrSize;
 
 
     struct timespec ts = {0};
@@ -411,6 +414,7 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
     etcpMsgHead_t* const head = (etcpMsgHead_t* const)buff;
     pBuff->etcpHdr      = head;
     pBuff->etcpHdrSize  = sizeof(etcpMsgHead_t);
+    pBuff->msgSize     += pBuff->etcpHdrSize;
     head->fulltype      = ETCP_V1_FULLHEAD(ETCP_ACK);
     //Reverse the source and destination ports so that the packet goest back to where it came from
     head->srcPort       = conn->flowId.dstPort;
@@ -420,9 +424,11 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
 
     pBuff->etcpSackHdr      = (etcpMsgSackHdr_t*)buff;
     pBuff->etcpSackHdrSize  = sizeof(etcpMsgSackHdr_t);
+    pBuff->msgSize         += pBuff->etcpSackHdrSize;
 
     pBuff->etcpPayload  = buff + sizeof(etcpMsgSackHdr_t);
     pBuff->etcpPayloadSize = sizeof(etcpSackField_t) * sackCount;
+    pBuff->msgSize         += pBuff->etcpPayloadSize;
 
     memcpy(buff,sackHdrAndData,sackHdrAndDatSize);
 
@@ -431,6 +437,7 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
         ERR("Unexpected error on CQ: %s\n", cqError2Str(cqErr));
         return etcpECQERR;
     }
+    assert(pBuff->msgSize == ethEtcpSackPktSize);
 
     return etcpENOERR;
 }
@@ -439,8 +446,13 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
 //Traverse the receive queues and generate ack's
 etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const i64 maxSlots)
 {
-    if(maxAckPackets <= 0){
+    if_eqlikely(maxAckPackets <= 0){
         return etcpENOERR; //Don't bother trying if you don't want me to!
+    }
+
+
+    if_unlikely(conn->rxQ->slotsUsed == 0){
+        return etcpENOERR; //There's nothing to do here
     }
 
     i64 fieldIdx          = 0;
@@ -491,7 +503,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
 
         DBG("Now looking at slot %i\n", slotIdx);
         cqSlot_t* slot = NULL;
-        const cqError_t err = cqGetSlotIdx(conn->rxQ,&slot,slotIdx);
+        const cqError_t err = cqGetRdIdx(conn->rxQ,&slot,slotIdx);
 
         //This slot is empty, so stop making the field and start a new one
         if_eqlikely(err == cqEWRONGSLOT){
@@ -535,14 +547,12 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1;
-        cqCommitSlot(conn->rxQ,slotIdx,slot->len); //We're done with this packet, it can be RX'd now
-
     }
 
     //Push the last sack out
     if(unsentAcks > 0){
-        const i64 sackHdrAndDatSize = sizeof(etcpMsgSackHdr_t) + sizeof(etcpSackField_t) * (fieldIdx+1);
-        etcpError_t err = pushSackEthPacket(conn,tmpBuff,sackHdrAndDatSize);
+        sackHdr->sackCount = fieldIdx+1;
+        etcpError_t err = pushSackEthPacket(conn,tmpBuff,fieldIdx+1);
         if_unlikely(err == etcpETRYAGAIN){
             WARN("Ran out of slots for sending acks, come back again\n");
             return err;
@@ -568,7 +578,7 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
 
     const i64 slotCount = cq->slotCount;
     for(i64 i = 0; i < slotCount && i < maxSlots; i++){
-        const cqError_t err = cqGetSlotIdx(cq,&slot,lastTxIdx);
+        const cqError_t err = cqGetRdIdx(cq,&slot,lastTxIdx);
         if_eqlikely(err == cqEWRONGSLOT){
             //The slot is empty
             continue;
@@ -720,14 +730,9 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
         }
 
 
-        //TODO XXX - not sure what I was thinking when I did this? It seems unnecessary given the CQ sturcture???
         //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){
             return etcpETRYAGAIN; //Ack has not yet been made for this, cannot give over to the user until it has
-        }
-
-        if(datHdr->staleDat){
-            continue; //We've seen a packet in this slot before with this SEQ number, ignore it
         }
 
         const i8* dat = (i8*)(datHdr + 1);
