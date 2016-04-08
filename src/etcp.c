@@ -150,6 +150,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
     }
     //Successful ack! -- Do timing stats here
     DBG("Successful ack for seq %li at index=%li\n", seq, idx);
+
     //TODO XXX can do stats here.
     const i64 totalRttTime     = ackTime->swTxTimeNs - head->ts.swTxTimeNs; //Total round trip
     const i64 remoteProcessing = ackTime->swTxTimeNs - ackTime->swRxTimeNs; //Time in software on the remote side
@@ -348,9 +349,6 @@ static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, cons
     memcpy(&ethHdr->h_source, &srcAddr, ETH_ALEN);
     ethHdr->h_proto = htons(ETH_P_ECTP);
 
-    DBG("Ethernet header:\n");
-    hexdump(ethHdr,ETH_HLEN);
-
     if_eqlikely(vlan < 0){
         //No VLAN tag header, we're done!
         *len_io = ETH_HLEN;
@@ -509,10 +507,8 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
             return etcpECQERR;
         }
 
-        //We've now got a valid slot with a packet in it, grab the timestamp to see if it needs sending.
-        //const i64 skipEthHdrOffset          = conn->vlan < 0 ? ETH_HLEN : ETH_HLEN + sizeof(eth8021qTCI_t);
+        //At this point we have a valid packet
         const i8* const slotBuff            = slot->buff;
-        //const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff + skipEthHdrOffset);
         const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
         etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
 
@@ -522,6 +518,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
                 fieldIdx++;
                 fieldInProgress = false;
             }
+            cqCommitSlot(conn->rxQ,slotIdx,slot->len); //We're done with this packet, it can be RX'd now
             continue;
         }
 
@@ -538,6 +535,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1;
+        cqCommitSlot(conn->rxQ,slotIdx,slot->len); //We're done with this packet, it can be RX'd now
 
     }
 
@@ -555,7 +553,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         }
 
         //Account for the now sent messages by updating the seqAck value
-        conn->seqAck = conn->seqAck + sackFields[fieldIdx].offset + sackFields[fieldIdx].count - 1;
+        conn->seqAck = conn->seqAck + sackFields[fieldIdx].offset + sackFields[fieldIdx].count;
     }
     return etcpENOERR;
 
@@ -619,6 +617,9 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
                 return etcpEFATAL;
             }
         }
+
+        //before the packet is sent, make it ready to send again in the future just in case something goes wrong
+        pBuff->txState = ETCP_TX_RDY;
 
         uint64_t hwTxTimeNs = 0;
         const pBuff_t* const pbuff = slot->buff;
@@ -718,9 +719,15 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
             return etcpEBADPKT;
         }
 
+
+        //TODO XXX - not sure what I was thinking when I did this? It seems unnecessary given the CQ sturcture???
         //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){
             return etcpETRYAGAIN; //Ack has not yet been made for this, cannot give over to the user until it has
+        }
+
+        if(datHdr->staleDat){
+            continue; //We've seen a packet in this slot before with this SEQ number, ignore it
         }
 
         const i8* dat = (i8*)(datHdr + 1);

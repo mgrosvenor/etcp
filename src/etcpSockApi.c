@@ -404,6 +404,10 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
         doEtcpNetRx(sock->etcpState); //This is a generic RX function
     }
 
+    if(data == NULL || len_io == NULL || *len_io == 0){
+        return etcpENOERR; //Not trying to RX anything, just triggering a HW rx in case
+    }
+
     i64 maxAckPkts = 0;
     i64 maxAckSlots = 0;
     sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->rxQ, sock->sr.recvConn->txQ, &maxAckSlots, &maxAckPkts);
