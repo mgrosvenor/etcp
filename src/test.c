@@ -97,13 +97,14 @@ int etcptpTestServer()
 
 
 //Returns: >0 this is the number of acknowledgement packets that can be generated. <=0 no ack packets will be generated
-int64_t etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ )
+void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o )
 {
     DBG("RX TC Called!\n");
     (void)rxTcState;
     (void)datRxQ;
     (void)ackTxQ;
-    return 1;
+    *maxAckPkts_o = 1;
+    *maxAckSlots_o = 1;
 }
 
 void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ, bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o )

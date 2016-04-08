@@ -20,7 +20,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
 
 etcpError_t doEtcpNetTx(etcpConn_t* const conn, const i64 ackFirst, const i64 maxAckSlots, const i64 maxDatSlots);
 void doEtcpNetRx(etcpState_t* state);
-etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets);
+etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const i64 maxSlots);
 
 
 #endif /* SRC_ETCP_H_ */

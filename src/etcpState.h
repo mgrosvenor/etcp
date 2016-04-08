@@ -28,8 +28,19 @@ typedef struct etcpConn_s etcpConn_t;
 //The core feature of ETCP is that transmission control is externalised. These two functions provide the interface to that
 //feature.
 
-//Returns: >0 this is the number of acknowledgement packets that can be generated. <=0 no ack packets will be generated
-typedef int64_t (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ );
+// Receive Transmission Control callback:
+// This function is supplied by the user. It is triggered when there are new packets received (but not necessarily on every
+// new packet. The user's job is to determine how many of these packets will be acknowledged. This is a balancing act. A
+// a packet will not be dequeued and given to the user until it is acknowleged, but collecting more packets before generating
+// an ack can lead to fewer ack packets being sent. The function "returns" two values:
+// 1) maxAckslots: This limits the number of slots in the receive ring that the generateAcks() function will look at. It may
+//    take the following values: maxAckSlots <0 there is no limit (which practically means the upper number of slots),
+//    maxAckSlots =0, no slots will considered, max be considered this time: >0 maxAckSlots will be considered. The default
+//    value is 0.
+// 2) MaxAckPkts: This limits the number of AckPackets that will be generated as a result of considering the slots. It may
+//    take the following values: maxAckPkts <0 there is no limit (which practically will be bounded by the number of slots),
+//    maxAckPkts =0, no packets will be generated,  >0 at most maxAckPkts will be generated. The default value is 0.
+typedef void (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o );
 
 typedef void (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ, bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o );
 

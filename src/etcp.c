@@ -122,6 +122,9 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         return etcpECQERR;
     }
 
+
+
+
     cqCommitSlot(recvConn->datRxQ,seqIdx,toCopyTmp);
 
     return etcpENOERR;
@@ -439,7 +442,7 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
 
 
 //Traverse the receive queues and generate ack's
-etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
+etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const i64 maxSlots)
 {
     if(maxAckPackets <= 0){
         return etcpENOERR; //Don't bother trying if you don't want me to!
@@ -460,7 +463,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets)
     const i64 slotCount = conn->datRxQ->slotCount;
     i64 slotIdx = conn->seqAck;
     i64 completeAckPackets = 0;
-    for(i64 i = 0; i < slotCount; i++, slotIdx = slotIdx + 1 < slotCount ? slotIdx +1 : slotIdx + 1 - slotCount){
+    for(i64 i = 0; i < slotCount && i < maxSlots; i++, slotIdx = slotIdx + 1 < slotCount ? slotIdx +1 : slotIdx + 1 - slotCount){
 
         //We collected enough sack fields to make a whole packet and send it
         if_unlikely(fieldIdx >= ETCP_MAX_SACKS){

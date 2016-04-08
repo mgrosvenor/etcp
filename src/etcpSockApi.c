@@ -375,8 +375,12 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
         doEtcpNetRx(sock->etcpState); //This is a generic RX function
     }
 
-    const i64 maxAcks = sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->datRxQ, sock->sr.recvConn->ackTxQ);
-    generateAcks(sock->sr.recvConn,maxAcks);
+    i64 maxAckPkts = 0;
+    i64 maxAckSlots = 0;
+    sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->datRxQ, sock->sr.recvConn->ackTxQ, &maxAckSlots, &maxAckPkts);
+    if(maxAckPkts > 0 && maxAckSlots > 0){
+        generateAcks(sock->sr.recvConn,maxAckPkts, maxAckSlots);
+    }
 
     doEtcpUserRx(sock->sr.recvConn,data,len_io);
 
