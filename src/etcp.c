@@ -566,7 +566,7 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
 {
     cqSlot_t* slot = NULL;
     i64 lastTxIdx  = *lastTxIdx_io;
-    i64 hwTxCount  = 0;
+
 
     const i64 slotCount = cq->slotCount;
     for(i64 i = 0; i < slotCount && i < maxSlots; i++){
@@ -625,19 +625,16 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
         if_unlikely(state->ethHwTx(state->ethHwState, pBuff->buffer, pbuff->msgSize, &hwTxTimeNs) < 0){
             return etcpETRYAGAIN;
         }
-        hwTxCount++;
-
-        //The exanics do not yet support inline HW tx timestamping, but we can kind of fake it here
-        //XXX HACK - not sure what a generic way to do this is?
-        if_likely(pBuff->etcpDatHdr->txAttempts == 0){
-            pBuff->etcpHdr->ts.hwTxTimeNs = hwTxTimeNs;
-            pBuff->etcpHdr->hwTxTs        = 1;
-        }
-
-        pBuff->etcpDatHdr->txAttempts++; //Keep this around for next time.
 
         switch(pBuff->etcpHdr->type){
             case ETCP_DAT:{
+                //The exanics do not yet support inline HW tx timestamping, but we can kind of fake it here
+                //XXX HACK - not sure what a generic way to do this is?
+                if_likely(pBuff->etcpDatHdr->txAttempts == 0){
+                    pBuff->etcpHdr->ts.hwTxTimeNs = hwTxTimeNs;
+                    pBuff->etcpHdr->hwTxTs        = 1;
+                }
+                pBuff->etcpDatHdr->txAttempts++; //Keep this around for next time.
                 if_eqlikely(pBuff->etcpDatHdr->noAck){
                     //We're done with the packet, not expecting an ack, so drop it now
                     cqReleaseSlotRd(cq,lastTxIdx);

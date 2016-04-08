@@ -369,12 +369,20 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
 
     if(maxAck > 0 || maxDat > 0){
         if_eqlikely(ackFirst){
-            doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
-            doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+            if_eqlikely(sock->sr.recvConn){
+                doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+            }
+            if_eqlikely(sock->sr.sendConn){
+                doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+            }
         }
         else{
-            doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
-            doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+            if_eqlikely(sock->sr.sendConn){
+                doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+            }
+            if_eqlikely(sock->sr.recvConn){
+                doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+            }
         }
     }
 

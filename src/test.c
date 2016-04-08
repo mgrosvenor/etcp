@@ -121,7 +121,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
 
     int i = 0;
     if(ackTxQ){
-        for(; i < datTxQ->slotCount; i++){
+        for(; i < ackTxQ->slotCount; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGetSlotIdx(ackTxQ,&slot,i);
             if(cqe != cqENOERR){
