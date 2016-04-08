@@ -21,10 +21,8 @@ void etcpConnDelete(etcpConn_t* const conn)
 {
     if_unlikely(!conn){ return; }
 
-    if_likely(conn->datTxQ != NULL){ cqDelete(conn->datTxQ); }
-    if_likely(conn->datRxQ != NULL){ cqDelete(conn->datRxQ); }
-    if_likely(conn->ackTxQ != NULL){ cqDelete(conn->ackTxQ); }
-    if_likely(conn->ackRxQ != NULL){ cqDelete(conn->ackRxQ); }
+    if_likely(conn->txQ != NULL){ cqDelete(conn->txQ); }
+    if_likely(conn->rxQ != NULL){ cqDelete(conn->rxQ); }
 
     free(conn);
 
@@ -36,29 +34,18 @@ etcpConn_t* etcpConnNew(etcpState_t* const state, const i64 windowSize, const i3
     etcpConn_t* conn = calloc(1, sizeof(etcpConn_t));
     if_unlikely(!conn){ return NULL; }
 
-    conn->datRxQ = cqNew(buffSize,windowSize);
-    if_unlikely(conn->datRxQ == NULL){
+    conn->rxQ = cqNew(buffSize,windowSize);
+    if_unlikely(conn->rxQ == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
 
-    conn->datTxQ = cqNew(buffSize,windowSize);
-    if_unlikely(conn->datTxQ == NULL){
+    conn->txQ = cqNew(buffSize,windowSize);
+    if_unlikely(conn->txQ == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
 
-    conn->ackRxQ = cqNew(buffSize,windowSize);
-    if_unlikely(conn->ackRxQ == NULL){
-        etcpConnDelete(conn);
-        return NULL;
-    }
-
-    conn->ackTxQ = cqNew(buffSize,windowSize);
-    if_unlikely(conn->ackTxQ == NULL){
-        etcpConnDelete(conn);
-        return NULL;
-    }
 
     conn->flowId.srcAddr = srcAddr;
     conn->flowId.srcPort = srcPort;

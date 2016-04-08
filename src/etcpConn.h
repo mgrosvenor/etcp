@@ -32,14 +32,9 @@ struct etcpConn_s {
 
     etcpState_t* state; //For working back to the global state
 
-    cq_t* datRxQ; //Queue for incoming packets
-    cq_t* datTxQ; //Queue for outgoing packets
-    i64 lastDatTxIdx;
-
-    cq_t* ackTxQ; //Queue for outgoing acknowledgement packets
-    i64 lastAckTxIdx;
-
-    cq_t* ackRxQ; //Queue for outgoing acknowledgement packets
+    cq_t* rxQ; //Queue for incoming packets
+    cq_t* txQ; //Queue for outgoing packets
+    i64 lastTxIdx;
 
     i64 seqAck; //The current acknowledge sequence number
     i64 seqSnd; //The current send sequence number

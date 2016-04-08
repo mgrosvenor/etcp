@@ -88,6 +88,9 @@ int etcptpTestServer()
         printf("%i 0x%02x\n", i, (uint8_t)data[i]);
     }
 
+    //Trigger the ACK send
+    etcpSend(accSock,NULL,0);
+
     //Close the connection
     etcpClose(sock);
 
@@ -107,25 +110,41 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const
     *maxAckSlots_o = 1;
 }
 
-void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, cq_t* ackTxQ, const cq_t* ackRxQ, bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o )
+void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRxQ, cq_t* ackTxQ, const cq_t* const datRxQ,  bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o)
 {
     (void)txTcState;
-    (void)datTxQ;
-    (void)ackTxQ;
     (void)ackRxQ;
+    (void)datRxQ;
     (void)ackFirst;
     (void)maxAck_o;
     (void)maxDat_o;
-    int i = 0;
-    for(; i < datTxQ->slotCount; i++){
-        cqSlot_t* slot = NULL;
-        cqError_t cqe = cqGetSlotIdx(datTxQ,&slot,i);
-        if(cqe != cqENOERR){
-            break;
-        }
-        pBuff_t* pbuff = slot->buff;
-        pbuff->txState = ETCP_TX_NOW;
 
+    int i = 0;
+    if(ackTxQ){
+        for(; i < datTxQ->slotCount; i++){
+            cqSlot_t* slot = NULL;
+            cqError_t cqe = cqGetSlotIdx(ackTxQ,&slot,i);
+            if(cqe != cqENOERR){
+                break;
+            }
+            pBuff_t* pbuff = slot->buff;
+            pbuff->txState = ETCP_TX_NOW;
+
+        }
+    }
+    *maxAck_o = i;
+    *ackFirst = true;
+
+    if(datTxQ){
+        for(i=0; i < datTxQ->slotCount; i++){
+            cqSlot_t* slot = NULL;
+            cqError_t cqe = cqGetSlotIdx(datTxQ,&slot,i);
+            if(cqe != cqENOERR){
+                break;
+            }
+            pBuff_t* pbuff = slot->buff;
+            pbuff->txState = ETCP_TX_NOW;
+        }
     }
 
     *maxDat_o = i;

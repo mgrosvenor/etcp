@@ -192,7 +192,7 @@ etcpError_t addConnMapping(etcpSocket_t* const sock, const uint32_t windowSize, 
     htKey_t srcKey = {.keyHi = srcAddr, .keyLo = srcPort };
     htErr = htAddNew(srcsTable,&srcKey,conn);
     if_unlikely(htErr != htENOEROR){
-        WARN("Trying to setup an exisiting connection\n");
+        WARN("Trying to setup an existing connection\n");
         //We're already connected using the same source and destination ports!
         //Clean up the mess
         etcpConnDelete(conn);
@@ -338,25 +338,46 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
         return etcpEWRONGSOCK;
     }
 
-    doEtcpUserTx(sock->sr.sendConn,toSendData,toSendLen_io);
+    if(toSendData != NULL && *toSendLen_io > 0){
+        doEtcpUserTx(sock->sr.sendConn,toSendData,toSendLen_io);
+    }
 
     bool ackFirst = true;
     i64 maxAck = -1;
     i64 maxDat = -1;
 
+    cq_t* sendTxQ = sock->sr.sendConn ? sock->sr.sendConn->txQ : NULL; //Outbound DAT queue
+    cq_t* sendRxQ = sock->sr.sendConn ? sock->sr.sendConn->rxQ : NULL; //Inbound ACK queue
+    cq_t* recvTxQ = sock->sr.recvConn ? sock->sr.recvConn->txQ : NULL; //Outbound ACK queue
+    cq_t* recvRxQ = sock->sr.recvConn ? sock->sr.recvConn->rxQ : NULL; //Inboud DAT queue
+
     //If TX is event triggered then do it now, this is the event!
     if(sock->etcpState->eventTriggeredTx){
         sock->etcpState->etcpTxTc(
                 sock->etcpState->etcpTxTcState,
-                sock->sr.sendConn->datTxQ,
-                sock->sr.sendConn->ackTxQ,
-                sock->sr.sendConn->ackTxQ,
+                sendTxQ,
+                sendRxQ,
+                recvTxQ,
+                recvRxQ,
                 &ackFirst,
                 &maxAck,
                 &maxDat);
     }
 
-    doEtcpNetTx(sock->sr.sendConn,ackFirst,maxAck,maxDat);
+    maxAck = maxAck < 0 ? INT64_MAX : maxAck;
+    maxDat = maxDat < 0 ? INT64_MAX : maxDat;
+
+    if(maxAck > 0 || maxDat > 0){
+        if_eqlikely(ackFirst){
+            doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+            doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+        }
+        else{
+            doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+            doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+        }
+    }
+
 
     return etcpENOERR;
 }
@@ -371,14 +392,18 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
     }
 
     //If RX is event triggered then do it now, this is the event!
-    if(sock->etcpState->eventTriggeredRx){
+    if_eqlikely(sock->etcpState->eventTriggeredRx){
         doEtcpNetRx(sock->etcpState); //This is a generic RX function
     }
 
     i64 maxAckPkts = 0;
     i64 maxAckSlots = 0;
-    sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->datRxQ, sock->sr.recvConn->ackTxQ, &maxAckSlots, &maxAckPkts);
-    if(maxAckPkts > 0 && maxAckSlots > 0){
+    sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->rxQ, sock->sr.recvConn->txQ, &maxAckSlots, &maxAckPkts);
+
+    maxAckPkts = maxAckPkts < 0 ? INT64_MAX : maxAckPkts;
+    maxAckSlots = maxAckSlots < 0 ? INT64_MAX : maxAckSlots;
+
+    if_eqlikely(maxAckPkts > 0 && maxAckSlots > 0){
         generateAcks(sock->sr.recvConn,maxAckPkts, maxAckSlots);
     }
 
@@ -491,5 +516,6 @@ failReleaseWr:
     return result;
 
 }
+
 
 
