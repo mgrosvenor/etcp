@@ -320,7 +320,7 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
     }
 
     //Ok we're done with the entry in the cq
-    err = cqReleaseSlotRd(listenQ,idx);
+    err = cqReleaseSlot(listenQ,idx);
     if_unlikely(err != cqENOERR){
         DBG("Unexpected error on cq %s\n", cqError2Str(err));
         return etcpECQERR;
@@ -370,18 +370,18 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     if(maxAck > 0 || maxDat > 0){
         if_eqlikely(ackFirst){
             if_eqlikely(sock->sr.recvConn){
-                doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+                doEtcpNetTx(sock->sr.recvConn->txQ,sock->etcpState,maxAck);
             }
             if_eqlikely(sock->sr.sendConn){
-                doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+                doEtcpNetTx(sock->sr.sendConn->txQ,sock->etcpState,maxDat);
             }
         }
         else{
             if_eqlikely(sock->sr.sendConn){
-                doEtcpNetTx(sock->sr.sendConn->txQ,&sock->sr.sendConn->lastTxIdx,sock->etcpState,maxDat);
+                doEtcpNetTx(sock->sr.sendConn->txQ,sock->etcpState,maxDat);
             }
             if_eqlikely(sock->sr.recvConn){
-                doEtcpNetTx(sock->sr.recvConn->txQ,&sock->sr.recvConn->lastTxIdx,sock->etcpState,maxAck);
+                doEtcpNetTx(sock->sr.recvConn->txQ,sock->etcpState,maxAck);
             }
         }
     }
@@ -518,7 +518,7 @@ failDelSock:
 
 failReleaseWr:
     DBG("Releasing listen slot\n");
-    cqErr = cqReleaseSlotWr(srcsMap->listenQ,slotIdx);
+
     if_unlikely(cqErr != cqENOERR){
         ERR("Unexpected cq error while trying to exit on ENOMEM: %s\n", cqError2Str(cqErr));
         return etcpECQERR;

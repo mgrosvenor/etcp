@@ -86,13 +86,11 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     const i64 seqPkt        = datHdr->seqNum;
     const i64 seqMin        = recvConn->seqAck;
     const i64 seqMax        = recvConn->seqAck + rxQSlotCount;
-    const i64 seqIdx        = seqPkt % rxQSlotCount;
-    DBG("SlotCount = %li, seqPkt = %li, seqMin= %li, seqMax = %li, seqIdx = %li\n",
+    DBG("SlotCount = %li, seqPkt = %li, seqMin= %li, seqMax = %li\n",
         rxQSlotCount,
         seqPkt,
         seqMin,
-        seqMax,
-        seqIdx
+        seqMax
     );
 
     //When we receive a packet, it should be between seqMin and seqMax
@@ -110,7 +108,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
     i64 toCopy    = len; //By now this value has been checked to be right
     i64 toCopyTmp = toCopy;
-    cqError_t err = cqPushIdx(recvConn->rxQ,head,&toCopyTmp,seqIdx);
+    cqError_t err = cqPush(recvConn->rxQ,head,&toCopyTmp,seqPkt);
     if_unlikely(err == cqENOSLOT){
         return etcpETRYAGAIN; //We've run out of slots to put packets into, drop this packet
     }
@@ -122,17 +120,16 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         return etcpECQERR;
     }
 
-    cqCommitSlot(recvConn->rxQ,seqIdx,toCopyTmp);
+    cqCommitSlot(recvConn->rxQ,seqPkt,toCopyTmp);
 
     return etcpENOERR;
 }
 
 static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime)
 {
-    const uint64_t idx = seq % cq->slotCount;
-    DBG("Ack'ing packet with seq=%li and idx=%li\n", seq,idx);
+    DBG("Ack'ing packet with seq=%li\n", seq);
     cqSlot_t* slot = NULL;
-    const cqError_t err = cqGetRdIdx(cq,&slot,idx);
+    const cqError_t err = cqGet(cq,&slot,seq);
     if_unlikely(err == cqEWRONGSLOT){
         WARN("Got an ACK for a packet that's gone.\n");
         return etcpENOERR;
@@ -150,7 +147,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
         return etcpENOERR;
     }
     //Successful ack! -- Do timing stats here
-    DBG("Successful ack for seq %li at index=%li\n", seq, idx);
+    DBG("Successful ack for seq %li at index=%li\n", seq);
 
     //TODO XXX can do stats here.
     const i64 totalRttTime     = ackTime->swTxTimeNs - head->ts.swTxTimeNs; //Total round trip
@@ -163,7 +160,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
     DBG("Packet spent %lins on the wire\n", networkTime);
 
     //Packet is now ack'd, we can release this slot and use it for another TX
-    const cqError_t cqErr = cqReleaseSlotRd(cq,idx);
+    const cqError_t cqErr = cqReleaseSlot(cq,seq);
     if_unlikely(cqErr != cqENOERR){
         ERR("Unexpected cq error: %s\n", cqError2Str(cqErr));
         return etcpECQERR;
@@ -467,10 +464,9 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
     etcpSackField_t* const sackFields = ( etcpSackField_t* const)(tmpBuff + sizeof(etcpMsgSackHdr_t));
 
     //Iterate through the rx packets to build up sack ranges
-    const i64 slotCount = conn->rxQ->slotCount;
     i64 slotIdx = conn->seqAck;
     i64 completeAckPackets = 0;
-    for(i64 i = 0; i < slotCount && i < maxSlots; i++, slotIdx = slotIdx + 1 < slotCount ? slotIdx +1 : slotIdx + 1 - slotCount){
+    for(i64 i = conn->rxQ->rdMin; i < conn->rxQ->rdMax && i < maxSlots; i++){
 
         //We collected enough sack fields to make a whole packet and send it
         if_unlikely(fieldIdx >= ETCP_MAX_SACKS){
@@ -503,7 +499,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
 
         DBG("Now looking at slot %i\n", slotIdx);
         cqSlot_t* slot = NULL;
-        const cqError_t err = cqGetRdIdx(conn->rxQ,&slot,slotIdx);
+        const cqError_t err = cqGet(conn->rxQ,&slot,i);
 
         //This slot is empty, so stop making the field and start a new one
         if_eqlikely(err == cqEWRONGSLOT){
@@ -570,15 +566,13 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
 }
 
 
-etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState_t* const state, const i64 maxSlots )
+etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i64 maxSlots )
 {
     cqSlot_t* slot = NULL;
-    i64 lastTxIdx  = *lastTxIdx_io;
 
 
-    const i64 slotCount = cq->slotCount;
-    for(i64 i = 0; i < slotCount && i < maxSlots; i++){
-        const cqError_t err = cqGetRdIdx(cq,&slot,lastTxIdx);
+    for(i64 i = cq->rdMin; i < cq->rdMax && i < maxSlots; i++){
+        const cqError_t err = cqGet(cq,&slot,i);
         if_eqlikely(err == cqEWRONGSLOT){
             //The slot is empty
             continue;
@@ -593,7 +587,7 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
 
         if_eqlikely(pBuff->txState == ETCP_TX_DRP ){
             //We're told to drop the packet. Release it and continue
-            cqReleaseSlotRd(cq,lastTxIdx);
+            cqReleaseSlot(cq,i);
             continue;
         }
         else if_unlikely(pBuff->txState != ETCP_TX_NOW ){
@@ -648,13 +642,13 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
                 pBuff->etcpDatHdr->txAttempts++; //Keep this around for next time.
                 if_eqlikely(pBuff->etcpDatHdr->noAck){
                     //We're done with the packet, not expecting an ack, so drop it now
-                    cqReleaseSlotRd(cq,lastTxIdx);
+                    cqReleaseSlot(cq,i);
                 }
                 //Otherwise, we need to wait for the packet to be ack'd
                 break;
             }
             case ETCP_ACK:{
-                cqReleaseSlotRd(cq,lastTxIdx);
+                cqReleaseSlot(cq,i);
                 break;
             }
             default:{
@@ -664,9 +658,6 @@ etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState
 
         }
 
-        //Inciment the last sent index so next time we come back we start at a resonable place?
-        //TODO XXX, could probably make this a part of the TC call
-        lastTxIdx = lastTxIdx + 1 <  slotCount ? lastTxIdx + 1 : lastTxIdx + 1 - slotCount;
     }
 
     return etcpENOERR;
@@ -703,9 +694,9 @@ void doEtcpNetRx(etcpState_t* state)
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
 {
     while(1){
-        i64 slotIdx = -1;
+        i64 seqNum = -1;
         cqSlot_t* slot;
-        cqError_t cqErr = cqGetNextRd(conn->rxQ,&slot,&slotIdx);
+        cqError_t cqErr = cqGetNextRd(conn->rxQ,&slot,&seqNum);
         if_unlikely(cqErr == cqENOSLOT){
             //Nothing here. Give up
             return etcpETRYAGAIN;
@@ -718,7 +709,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
         const i64 msgHdrs = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
         if_unlikely(slot->len < msgHdrs){
             ERR("Packet too small for headers %li < %li\n", slot->len, msgHdrs );
-            cqReleaseSlotRd(conn->rxQ,slotIdx);
+            cqReleaseSlot(conn->rxQ,seqNum);
             return etcpEBADPKT;
         }
 
@@ -740,7 +731,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
         //Looks ok, give the data over to the user
         memcpy(data,dat,MIN(datHdr->datLen,*len_io));
 
-        cqReleaseSlotRd(conn->rxQ,slotIdx);
+        cqReleaseSlot(conn->rxQ,seqNum);
         if(datHdr->staleDat){
             continue; //The packet is stale, so release it, but get another one
         }

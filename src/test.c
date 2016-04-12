@@ -117,10 +117,10 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const
     (void)datRxQ;
     (void)ackTxQ;
 
-    int i = 0;
-    for(; i < datRxQ->slotCount; i++){
+    int i = datRxQ->rdMin;
+    for(; i < datRxQ->rdMax; i++){
         cqSlot_t* slot = NULL;
-        cqError_t cqe = cqGetNextRd(datRxQ,&slot,i);
+        cqError_t cqe = cqGet(datRxQ,&slot,i);
         if(cqe != cqENOERR){
             break;
         }
@@ -156,11 +156,11 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     (void)datRxQ;
 
     //Send all acks immediately
-    int i = 0;
+    int i = ackTxQ->rdMin;
     if(ackTxQ){
-        for(; i < ackTxQ->slotCount; i++){
+        for(; i < ackTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGetRdIdx(ackTxQ,&slot,i);
+            cqError_t cqe = cqGet(ackTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }
@@ -178,11 +178,11 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
-    i = 0;
+    i = datTxQ->rdMin;
     if(datTxQ){
-        for(i=0; i < datTxQ->slotCount; i++){
+        for(i=0; i < datTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGetRdIdx(datTxQ,&slot,i);
+            cqError_t cqe = cqGet(datTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }

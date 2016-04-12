@@ -29,6 +29,8 @@ i64 _debug_out_(
         const char* function,
         const char* format, ... );
 
+#define FAT( /*format, args*/...)  _fat_helper(__VA_ARGS__, "")
+#define _fat_helper(format, ...) _debug_out_(true, DBGMODE_FAT, __LINE__, __FILE__, __FUNCTION__, format, __VA_ARGS__ )
 #define ERR( /*format, args*/...)  _err_helper(__VA_ARGS__, "")
 #define _err_helper(format, ...) _debug_out_(true, DBGMODE_ERR, __LINE__, __FILE__, __FUNCTION__, format, __VA_ARGS__ )
 #define ERR2( /*format, args*/...)  _err_helper(__VA_ARGS__, "")

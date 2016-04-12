@@ -10,6 +10,8 @@
 #ifndef CIRCULARQUEUE_H_
 #define CIRCULARQUEUE_H_
 
+#include <stdbool.h>
+
 #include "types.h"
 
 /*
@@ -19,7 +21,7 @@
  * Rd = Read sequence no (64bit ~= infinity = 200 years at 1op/ns)
  * Wr = Write sequence no (64bit ~= infinity = 200 years at 1op/ns)
  *
- *                 ////////////////************
+ *                 \\\\\\\\\\\\\\\************
  *  0 ---------------------------------------------------- inf
  *                 ^              ^            ^
  *                 RD             WR           WR_Max = RD+Sz
@@ -29,8 +31,9 @@
 typedef struct __attribute__((packed)){
     //Make sure that the state is sized for a 64bit value. It wil be aligned this way as well for atomic access
     //Do not play with these if you are a user.
-    i64 len;     //Length of buffer
-    void* buff;  //Place to get/put data
+    i64 len;     //Length of data - this is a constant, and should not be altered
+    void* buff;  //Place to get/put data - this is a constant and should not be altered
+    bool valid;  //There is data inside this structure
 } cqSlot_t;
 
 
@@ -38,11 +41,15 @@ typedef struct {
     i64 slotCount;
     i64 slotDataSize;
     i64 slotsUsed;
+    i64 rdMin;
+    i64 rdMax;
+    i64 wrMin;
+    i64 wrMax;
     volatile i64 rdSeq;
     volatile i64 wrSeq;
 
     //__itmes are "private"
-    i64 __slotCouuntLog2;
+    i64 __slotCountLog2;
     i64 __seqMask;
     i64 __slotSize;
     i8* __slots;
@@ -84,7 +91,7 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCount);
  * @return          ENOERROR - at slot_o is a valid pointer
  *                  ERANGE   - the sequence number given is out of range.
  */
-cqError_t cqGet(cq_t* const cq, cqSlot_t** const slot_o, const i64 seqNum);
+cqError_t cqGet(const cq_t* const cq, cqSlot_t** const slot_o, const i64 seqNum);
 
 
 /**
@@ -119,5 +126,22 @@ void cqDelete(cq_t* const cq);
 //Convert a cqError number into a text description
 
 const char* cqError2Str(cqError_t const err);
+
+
+// *************************************************************************************************************************
+// Non-primitive functions, just wrappers around the previous things
+cqError_t cqPush(cq_t* const cq, const void* __restrict data, i64* const len_io, i64 const seqNum);
+cqError_t cqPull(cq_t* const cq, void* __restrict data, i64* const len_io, i64 const seqNum);
+
+cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum_o);
+cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io, i64* const slotIdx_o);
+cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum_o);
+cqError_t cqCommitSlot(cq_t* const cq, const i64 seqNum, const i64 len);
+
+cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum_o);
+cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const seqNum_o);
+cqError_t cqReleaseSlot(cq_t* const cq, const i64 seqNum);
+
+
 
 #endif /* CIRCULARQUEUE_H_ */

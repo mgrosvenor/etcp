@@ -18,7 +18,7 @@
 etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io);
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io);
 
-etcpError_t doEtcpNetTx(cq_t* const cq, i64* const lastTxIdx_io, const etcpState_t* const state, const i64 maxSlots );
+etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i64 maxSlots );
 void doEtcpNetRx(etcpState_t* state);
 etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const i64 maxSlots);
 
