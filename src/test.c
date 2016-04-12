@@ -36,7 +36,7 @@ int etcptpTestClient()
 {
     //Open the connection
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpConnect(sock,16,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
+    etcpConnect(sock,4,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
 
     i64 len = 128;
     i8 dat[len];
@@ -62,7 +62,7 @@ int etcptpTestServer()
 {
     //Open a socket and bind it
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpBind(sock,16,2048,0x000002,0x00000E, -1, -1);
+    etcpBind(sock,4,2048,0x000002,0x00000E, -1, -1);
 
     //Tell the socket to list
     etcpListen(sock,8);
@@ -178,9 +178,9 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
-    i = datTxQ->rdMin;
+    i = datTxQ->wrMin;
     if(datTxQ){
-        for(i=0; i < datTxQ->rdMax; i++){
+        for(i=0; i < datTxQ->wrMax; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGet(datTxQ,&slot,i);
             if(cqe != cqENOERR){

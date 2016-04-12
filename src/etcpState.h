@@ -80,7 +80,7 @@ typedef struct etcpSrcsMap_s etcpLAMap_t;
 typedef struct etcpSrcsMap_s {
 
     //These are for new connections that happen when we're listening
-    uint32_t listenWindowSize;
+    uint32_t listenWindowSizeLog2;
     uint32_t listenBuffSize;
     i64 vlan;
     i64 priority;
