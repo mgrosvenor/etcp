@@ -12,35 +12,40 @@
 
 #include "types.h"
 
-
-typedef enum {
-    cqSTFREE = 0,
-    cqSTINUSEWR,
-    cqSTINUSERD,
-    cqSTREADY,
-} cqSlotState_t;
+/*
+ * A circular buffer that acts as a queue.
+ *
+ * Sz = size of the queue
+ * Rd = Read sequence no (64bit ~= infinity = 200 years at 1op/ns)
+ * Wr = Write sequence no (64bit ~= infinity = 200 years at 1op/ns)
+ *
+ *                 ////////////////************
+ *  0 ---------------------------------------------------- inf
+ *                 ^              ^            ^
+ *                 RD             WR           WR_Max = RD+Sz
+ */
 
 
 typedef struct __attribute__((packed)){
     //Make sure that the state is sized for a 64bit value. It wil be aligned this way as well for atomic access
     //Do not play with these if you are a user.
-    union {
-        volatile cqSlotState_t __state;
-        volatile uint64_t ___state;
-    };
     i64 len;     //Length of buffer
     void* buff;  //Place to get/put data
 } cqSlot_t;
 
 
 typedef struct {
-    i64 slotSize;
-    i64 slotDataSize;
     i64 slotCount;
+    i64 slotDataSize;
     i64 slotsUsed;
-    i64 _rdIdx;
-    i64 _wrIdx;
-    i8* _slots;
+    volatile i64 rdSeq;
+    volatile i64 wrSeq;
+
+    //__itmes are "private"
+    i64 __slotCouuntLog2;
+    i64 __seqMask;
+    i64 __slotSize;
+    i8* __slots;
 } cq_t;
 
 
@@ -55,8 +60,9 @@ typedef enum {
     cqERANGE,       //!< cqERANGE       Out of range!
     cqEWRONGSLOT,   //!< cqEWRONGSLOT   This slot is not in the sate we expected
     cqEPANIC,       //!< cqEPANIC       Something bad has happened, user has taken too much memory!
-    cqNULLPARAM,    //!< cqNULLPARAM    A parameter supplied was null and it shouldn't be!
+    cqENULLPARAM,    //!< cqNULLPARAM    A parameter supplied was null and it shouldn't be!
     cqECOUNT,       //!< cqERCOUNT      Total number of error codes.
+    cqENOCHANGE,    //!< cqENOCHANGE    No change to the sequence number. Are you sure there's a contiguous slot?
 } cqError_t;
 
 
@@ -69,103 +75,40 @@ typedef enum {
 cq_t* cqNew(const i64 buffSize, const i64 slotCount);
 
 
+// *************************************************************************************************************************
 /**
- * @brief           Try to get the next slot in the CQ for writing to. Once done, call CommitSlot.
+ * @brief           Try to get an item anywhere in the operating range.
  * @param cq        The CQ structure that we're operating on
  * @param slot_o    If successful, slot_o variable will point to a valid CQ slot.
- * @param slotIdx_o If successful, slotIdx_o will point to the index of the slot returned in slot_o, use this for CommitSlot.
- * @return          A cqError code this may be ENOERR, which indicates that slot_o is a valid pointer or ENOSLOT which
- *                  indicates that there are no free slots.
+ * @param seqNum    The index to try
+ * @return          ENOERROR - at slot_o is a valid pointer
+ *                  ERANGE   - the sequence number given is out of range.
  */
-cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o);
+cqError_t cqGet(cq_t* const cq, cqSlot_t** const slot_o, const i64 seqNum);
+
 
 /**
- * @brief           Try to get a writing slot at a specific index. This breaks the circular nature of the ring..
+ * @brief           Push the write pointer forwards if possible. This will only advance if there is a contiguous sequence of
+ *                  non-null items in the slots after the current write pointer.
  * @param cq        The CQ structure that we're operating on
- * @param slot_o    If successful, slot_o variable will point to a valid CQ slot.
- * @param slotIdx   The index to try
- * @return
+ * @return          ENOERROR -  success
+ *                  ENOCHANGE - no change to the write seq num
  */
-cqError_t cqGetNextWrIdx(cq_t*const cq, cqSlot_t** const slot_o, const i64 slotIdx);
-
-/**
- * @brief           Tell the CQ that the slot is empty.
- * @param cq        The CQ structure we're operating on
- * @param slot      The slot to commit to the data to.
- * @return          ESUCCESS
- */
-cqError_t cqReleaseSlotWr(cq_t* const cq, i64 const slotIdx);
+cqError_t cqAdvWrSeq(cq_t* const cq);
 
 
 /**
- * @brief       Equivalent to GetNext and memcopy
- * @param cq    The CQ structure that we're operating on
- * @param data  Data that you wish to have copied into the slot
- * @param len   Length of the data, this must be less than slot size. If it is too big, ETRUNC will be returned and len will
- *              will be set to the number of bytes actually copied
- * @param idx_o The index of this item to be used for committing later
- * @return
- */
-cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io, i64* const idx_o);
-
-/**
- * @brief       Equivalent to GetNextIdx and memcopy
- * @param cq    The CQ structure that we're operating on
- * @param data  Data that you wish to have copied into the slot
- * @param len   Length of the data, this must be less than slot size. If it is too big, ETRUNC will be returned and len will
- *              will be set to the number of bytes actually copied
- * @return
- */
-cqError_t cqPushIdx(cq_t* const cq, const void* __restrict data, i64* const len, const i64 idx);
-
-
-/**
- * @brief           Tell the CQ that the slot is ready to be read. After this, no more changes can be made
- * @param cq        The CQ structure we're operating on
- * @param slot      The slot to commit to the data to.
- * @return
- */
-cqError_t cqCommitSlot(cq_t* const cq, const i64 slotIdx, const i64 len);
-
-
-/**
- * @brief           Try to get the next slot in the CQ for reading from. Once done, call ReleaseSlot.
+ * @brief           Push the read pointer forwards if possible. This will only advance if there is a contiguous sequence of
+ *                  null items in the slots after the current read pointer.
  * @param cq        The CQ structure that we're operating on
- * @param slot_o    If successful, slot_o variable will point to a valid CQ slot.
- * @param slotIdx_o If successful, slotIfx_o variable will point to the index of the slot returned, use this for ReleaseSlot
- * @return          A cqError code this may be ENOERR, which indicates that slot_o is a valid pointer or ENOSLOT which
- *                  indicates that there are no slots to read.
+ * @param rdSeqBef The read sequence number when called, you can compare this to cq_t.rdSeq to see how much has changed
+ * @return          ENOERROR -  success
+ *                  ENOCHANGE - no change to the read seq num
  */
-cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o);
+cqError_t cqAdvRdSeq(cq_t* const cq);
 
+// *************************************************************************************************************************
 
-/**
- * @brief           Tell the CQ that the slot is empty.
- * @param cq        The CQ structure we're operating on
- * @param slot      The slot to commit to the data to.
- * @return          ESUCCESS
- */
-cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx);
-
-
-/**
- * @brief           Equivalent to GetNextRd, memcopy, ReleaseSlot.
- * @param cq        The CQ structure that we're operating on
- * @param data      Place where you want to have data copied out of the slot
- * @param len       Length of the data area,
- * @param slotIdx   The index of the slot to commit
- * @return      ESUCCESS, ETURNC
- */
-cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const slotIdx);
-
-/**
- * @brief       Get a slot at the given index
- * @param cq
- * @param slot_o
- * @param slotIdx
- * @return
- */
-cqError_t cqGetRdIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx);
 
 /**
  * Free memory resoruces associated with this CQ

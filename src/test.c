@@ -120,7 +120,7 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const
     int i = 0;
     for(; i < datRxQ->slotCount; i++){
         cqSlot_t* slot = NULL;
-        cqError_t cqe = cqGetRdIdx(datRxQ,&slot,i);
+        cqError_t cqe = cqGetNextRd(datRxQ,&slot,i);
         if(cqe != cqENOERR){
             break;
         }

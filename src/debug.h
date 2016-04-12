@@ -16,7 +16,8 @@
 typedef enum {
     DBGMODE_DBG,
     DBGMODE_ERR,
-    DBGMODE_WARN
+    DBGMODE_WARN,
+    DBGMODE_FAT,
 } ch_dbg_mode_e;
 
 

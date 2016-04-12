@@ -13,33 +13,36 @@
 #include <string.h>
 #include <stdio.h>
 
-static inline i64 min(i64 lhs, i64 rhs)
-{
-    return lhs < rhs ? lhs : rhs;
-}
+#include "utils.h"
 
-
-cq_t* cqNew(const i64 buffSize, const i64 slotCount)
+//Slot count must be a power of 2 for performance reasons (to avoid a modulus on the critical path)
+cq_t* cqNew(const i64 buffSize, const i64 slotCountLog2)
 {
+    if(buffSize < 0 || slotCountLog2 < 0){
+        return cqERANGE;
+    }
+
     cq_t* result = calloc(1,sizeof(cq_t));
     if(!result){
         return NULL;
     }
 
-    result->slotCount    = slotCount;
-    result->slotDataSize = buffSize;
-    result->slotSize     = buffSize + sizeof(cqSlot_t);
-    result->slotSize     = (result->slotSize + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) -1 ); //Round up nearest word size
+    result->__slotCouuntLog2 = slotCountLog2;
+    result->slotCount        = 1 << slotCountLog2;
+    result->__seqMask        = result->slotCount - 1;
+    result->slotDataSize     = buffSize;
+    result->__slotSize       = buffSize + sizeof(cqSlot_t);
+    result->__slotSize       = (result->__slotSize + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) -1 ); //Round up nearest word size
 
-    //printf("Allocating %li slots of size %li for %liB\n", slotCount, result->slotSize, slotCount * result->slotSize);
-    result->_slots = calloc(slotCount, result->slotSize);
-    if(!result->_slots){
+    DBG("Allocating %li slots of size %li for %liB with mask=%016x\n", slotCount, result->slotSize, slotCount * result->slotSize);
+    result->__slots = calloc(result->slotCount, result->__slotSize);
+    if(!result->__slots){
         cqDelete(result);
         return NULL;
     }
 
-    for(i64 i = 0; i < slotCount; i++){
-        cqSlot_t* slot = (cqSlot_t*)(result->_slots + i * result->slotSize);
+    for(i64 i = 0; i < result->slotCount; i++){
+        cqSlot_t* slot = (cqSlot_t*)(result->__slots + i * result->__slotSize);
         slot->buff = (i8*)(slot + 1);
         slot->len  = result->slotDataSize;
     }
@@ -48,270 +51,55 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCount)
 
 }
 
-
-cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o)
+cqError_t cqGet(cq_t* const cq, cqSlot_t** const slot_o, const i64 seqNum)
 {
-    if(cq == NULL || slot_o == NULL || slotIdx_o == NULL){
-        return cqNULLPARAM;
+    if_unlikely(cq == NULL){
+        return cqENULLPARAM;
     }
 
-    const i64 slotCount = cq->slotCount;
-    const i64 idx = cq->_wrIdx;
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
-    if(slot->__state != cqSTFREE){
-        return cqENOSLOT;
+    if_unlikely(slot_o == NULL){
+        return cqENULLPARAM;
     }
 
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTINUSEWR;
-    __asm__ __volatile__ ("mfence"); //Atomically commit the new state
-
-    cq->_wrIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-    //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
-    *slotIdx_o = idx;
-    *slot_o = slot;
-    return cqENOERR;
-}
-
-cqError_t cqGetWrIdx(cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
-{
-
-    if(cq == NULL || slot_o == NULL){
-        return cqNULLPARAM;
-    }
-
-    const i64 idx       = slotIdx;
-    const i64 slotCount = cq->slotCount;
-
-    if(idx > slotCount || idx < 0){
+    if_unlikely(seqNum < cq->rdSeq){
         return cqERANGE;
     }
 
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
-    if(slot->__state != cqSTFREE){
-        return cqENOSLOT;
-    }
-
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTINUSEWR;
-    __asm__ __volatile__ ("mfence"); //Atomically commit the new state
-
-
-    //printf("Got a free slot at index %li, new index = %li\n", idx,cq->wrIdx);
-    *slot_o = slot;
-    return cqENOERR;
-}
-
-
-
-cqError_t cqReleaseSlotWr(cq_t* const cq, const i64 slotIdx)
-{
-    if(cq == NULL){
-        return cqNULLPARAM;
-    }
-
-    if(slotIdx < 0 || slotIdx > cq->slotCount){
+    if_unlikely(seqNum >= cq->rdSeq + cq->slotCount ){
         return cqERANGE;
     }
 
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  slotIdx * cq->slotSize);
-    if(slot->__state != cqSTINUSEWR){
-        return cqEWRONGSLOT;
-    }
-    slot->len     = cq->slotDataSize;
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTFREE; //Atomically commite this state
-    __asm__ __volatile__ ("mfence");
+    //Passed all the checks, this seqNumber is in the right range, turn it into a slot index.
+    const i64 idx = ( seqNum & cq->__seqMask);
 
-    //Set this to the current index, since it's now free, it's guaranteed to be writable in the future.
-    cq->_wrIdx = slotIdx;
-
-    return cqENOERR;
-}
-
-cqError_t cqPushNext(cq_t* const cq, const void* __restrict data, i64* const len_io, i64* const idx_o)
-{
-    if(cq == NULL || data == NULL || len_io == NULL){
-        return cqNULLPARAM;
-    }
-
-
-    cqSlot_t* slot = NULL;
-    i64 idx = -1;
-    cqError_t err = cqGetNextWr(cq, &slot, &idx);
-    if(err != cqENOERR){
-        return err;
-    }
-
-    const i64 len = *len_io;
-    const i64 toCopy = min(len, slot->len);
-    *len_io = toCopy;
-    *idx_o = idx;
-    memcpy(slot->buff,data,toCopy);
-
-    if(toCopy < len){
-        return cqETRUNC;
-    }
-
-
-    return cqENOERR;
-}
-
-
-cqError_t cqPushIdx(cq_t* const cq, const void* __restrict data, i64* const len_io, const i64 idx)
-{
-    if(cq == NULL || data == NULL || len_io == NULL){
-        return cqNULLPARAM;
-    }
-
-
-    cqSlot_t* slot = NULL;
-    cqError_t err = cqGetWrIdx(cq, &slot, idx);
-    if(err != cqENOERR){
-        return err;
-    }
-
-    const i64 len = *len_io;
-    const i64 toCopy = min(len, slot->len);
-    *len_io = toCopy;
-    memcpy(slot->buff,data,toCopy);
-
-    if(toCopy < len){
-        return cqETRUNC;
-    }
-
-    return cqENOERR;
-}
-
-
-cqError_t cqCommitSlot(cq_t* const cq, const i64 slotIdx, const i64 len)
-{
-    if(cq == NULL){
-        return cqNULLPARAM;
-    }
-
-    if(slotIdx < 0 || slotIdx > cq->slotCount){
-        return cqERANGE;
-    }
-
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  slotIdx * cq->slotSize);
-    if(slot->__state != cqSTINUSEWR){
-        return cqEWRONGSLOT;
-    }
-
-    if(len > slot->len){
-        return cqEPANIC; //Crap, it's likely that internal data structures have been overwritten here
-    }
-
-    slot->len     = len;
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTREADY; //Attomically commit this state
-    __asm__ __volatile__ ("mfence");
-
-    cq->slotsUsed++;
-    return cqENOERR;
-}
+    DBG("Getting item at index =%li (seq=%li)\n", )
+    *slot_o = cq->__slots + idx;
 
 
 
-cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const slotIdx_o)
-{
-    if(cq == NULL || slot_o == NULL || slotIdx_o == NULL){
-        return cqNULLPARAM;
-    }
-
-
-    const i64 slotCount = cq->slotCount;
-
-    const i64 idx = cq->_rdIdx;
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
-    if(slot->__state != cqSTREADY){
-        return cqENOSLOT;
-    }
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTINUSERD;
-    __asm__ __volatile__ ("mfence");
-
-    cq->_rdIdx = idx + 1 < slotCount ? idx + 1 : idx + 1 - slotCount;
-
-    *slotIdx_o = idx;
-    *slot_o = slot;
-    return cqENOERR;
 
 }
 
-cqError_t cqReleaseSlotRd(cq_t* const cq, const i64 slotIdx)
-{
-    if(cq == NULL){
-        return cqNULLPARAM;
-    }
 
-    if(slotIdx < 0 || slotIdx > cq->slotCount){
-        return cqERANGE;
-    }
+/**
+ * @brief           Push the write pointer forwards if possible. This will only advance if there is a contiguous sequence of
+ *                  non-null items in the slots after the current write pointer.
+ * @param cq        The CQ structure that we're operating on
+ * @return          ENOERROR -  success
+ *                  ENOCHANGE - no change to the write seq num
+ */
+cqError_t cqAdvWrSeq(cq_t* const cq);
 
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  slotIdx * cq->slotSize);
-    if(slot->__state != cqSTINUSERD){
-        return cqEWRONGSLOT;
-    }
 
-    __asm__ __volatile__ ("mfence");
-    slot->__state = cqSTFREE;
-    __asm__ __volatile__ ("mfence");
-
-    cq->slotsUsed--;
-
-    return cqENOERR;
-}
-
-cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const slotIdx_o)
-{
-    if(cq == NULL || data == NULL || len_io == NULL){
-        return cqNULLPARAM;
-    }
-
-    cqSlot_t* slot = NULL;
-    cqError_t err = cqGetNextRd(cq, &slot, slotIdx_o);
-    if(err != cqENOERR){
-        return err;
-    }
-
-    const i64 len = *len_io;
-    const i64 toCopy = min(len, slot->len);
-    *len_io = toCopy;
-    memcpy(data,slot->buff,toCopy);
-
-    if(toCopy < slot->len){
-        return cqETRUNC;
-    }
-
-    return cqENOERR;
-
-}
-
-//Get a non empty slot
-cqError_t cqGetRdIdx(const cq_t* const cq, cqSlot_t** const slot_o, const i64 slotIdx)
-{
-
-    if(cq == NULL || slot_o == NULL){
-        return cqNULLPARAM;
-    }
-
-    const i64 idx       = slotIdx;
-    const i64 slotCount = cq->slotCount;
-
-    if(idx > slotCount || idx < 0){
-        return cqERANGE;
-    }
-
-    cqSlot_t* slot = (cqSlot_t*)(cq->_slots +  idx * cq->slotSize);
-    if(slot->__state == cqSTFREE){
-        return cqEWRONGSLOT;
-    }
-
-    *slot_o = slot;
-    return cqENOERR;
-}
+/**
+ * @brief           Push the read pointer forwards if possible. This will only advance if there is a contiguous sequence of
+ *                  null items in the slots after the current read pointer.
+ * @param cq        The CQ structure that we're operating on
+ * @param rdSeqBef The read sequence number when called, you can compare this to cq_t.rdSeq to see how much has changed
+ * @return          ENOERROR -  success
+ *                  ENOCHANGE - no change to the read seq num
+ */
+cqError_t cqAdvRdSeq(cq_t* const cq);
 
 
 

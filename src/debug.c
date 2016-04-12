@@ -12,6 +12,8 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
+
 #include "debug.h"
 
 
@@ -32,6 +34,7 @@ i64 _debug_out_(
     char* fn =  (char*)filename;
     char* mode_str = NULL;
     switch(mode){
+        case DBGMODE_FAT:   mode_str = "Fatal"; break;
         case DBGMODE_ERR:   mode_str = "Error"; break;
         case DBGMODE_DBG:   mode_str = "Debug"; break;
         case DBGMODE_WARN:  mode_str = "Warning:"; break;
@@ -39,6 +42,10 @@ i64 _debug_out_(
     if(info) dprintf(OUTPUT_TO,"[%s - %s:%i:%s()]  ", mode_str, basename(fn), (int)line_num, function);
     i64 result = vdprintf(OUTPUT_TO,format,args);
     va_end(args);
+
+    if(mode == DBGMODE_FAT){
+        exit(-1);
+    }
 
     return result;
 }
