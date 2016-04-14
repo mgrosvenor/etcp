@@ -14,6 +14,7 @@
 #include "types.h"
 #include "etcpConn.h"
 #include "CircularQueue.h"
+#include "LinkedList.h"
 
 typedef struct etcpState_s etcpState_t;
 
@@ -34,6 +35,7 @@ struct etcpConn_s {
 
     cq_t* rxQ; //Queue for incoming packets
     cq_t* txQ; //Queue for outgoing packets
+    ll_t* staleQ; //An ordered list for holding stale packets that have missed the sequence number RX window.
     i64 lastTxIdx;
 
     i64 seqAck; //The current acknowledge sequence number

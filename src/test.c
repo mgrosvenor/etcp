@@ -9,8 +9,6 @@
 #include <exanic/fifo_tx.h>
 #include <exanic/time.h>
 
-
-
 #include "src/etcpSockApi.h"
 #include "src/debug.h"
 #include "src/CircularQueue.h"
@@ -110,7 +108,7 @@ int etcptpTestServer()
 
 
 //Returns: >0 this is the number of acknowledgement packets that can be generated. <=0 no ack packets will be generated
-void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o )
+void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datStaleQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o,  i64* const maxStaleSlots_o,  i64* const maxStaleAckPkts_o  )
 {
     DBG("RX TC Called!\n");
     (void)rxTcState;
@@ -145,8 +143,31 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const
 
     }
 
-    *maxAckPkts_o = 1;
-    *maxAckSlots_o = 1;
+    llSlot_t* slot = NULL;
+    for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; llGetNext(datStaleQ,&slot) ){
+        etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
+        switch(head->fulltype){
+            //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
+            case ETCP_V1_FULLHEAD(ETCP_DAT):{
+                etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
+                DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
+                break;
+            }
+            case ETCP_V1_FULLHEAD(ETCP_ACK):{
+                etcpMsgSackHdr_t* const sackHdr = (etcpMsgSackHdr_t*)(head +1);
+                DBG("Got a sack packet with base seq no %li\n", sackHdr->sackBaseSeq);
+                break;
+            }
+            default:
+                WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
+                        head->magic, ETCP_MAGIC, head->ver, ETCP_V1, head->type);
+        }
+    }
+
+    *maxAckPkts_o      = 1;
+    *maxAckSlots_o     = 1;
+    *maxStaleSlots_o   = 1;
+    *maxStaleAckPkts_o = 1;
 }
 
 void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRxQ, cq_t* ackTxQ, const cq_t* const datRxQ,  bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o)
@@ -156,9 +177,9 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     (void)datRxQ;
 
     //Send all acks immediately
-    int i = ackTxQ->rdMin;
+    int i = 0;
     if(ackTxQ){
-        for(; i < ackTxQ->rdMax; i++){
+        for(i = ackTxQ->rdMin; i < ackTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGet(ackTxQ,&slot,i);
             if(cqe != cqENOERR){
@@ -178,9 +199,9 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
-    i = datTxQ->wrMin;
+    i = 0;
     if(datTxQ){
-        for(i=0; i < datTxQ->wrMax; i++){
+        for(i = datTxQ->rdMin; i < datTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGet(datTxQ,&slot,i);
             if(cqe != cqENOERR){

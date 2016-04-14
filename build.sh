@@ -31,7 +31,7 @@ cake $SRC \
     --append-LINKFLAGS="$LINKFLAGS" \
     --no-git-root\
     --no-git-parent\
-    --begintests src/CircularQueueTest.c src/HashTableTest.c --endtests \   
+    --begintests src/CircularQueueTest.c src/HashTableTest.c src/LinkedListTest.c --endtests \   
     $@
 
   

@@ -29,20 +29,20 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCountLog2)
     }
 
     result->__slotCountLog2 = slotCountLog2;
-    result->slotCount       = 1 << slotCountLog2;
-    result->__seqMask       = result->slotCount - 1;
+    result->__slotCount       = 1 << slotCountLog2;
+    result->__seqMask       = result->__slotCount - 1;
     result->slotDataSize    = buffSize;
     result->__slotSize      = buffSize + sizeof(cqSlot_t);
     result->__slotSize      = (result->__slotSize + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) -1 ); //Round up nearest word size
 
-    DBG("Allocating %li slots of size %li for %liB with mask=%016x\n",  result->slotCount  , result->__slotSize,  result->slotCount   * result->__slotSize, result->__seqMask);
-    result->__slots = calloc(result->slotCount, result->__slotSize);
+    DBG("Allocating %li slots of size %li for %liB with mask=%016x\n",  result->__slotCount  , result->__slotSize,  result->__slotCount * result->__slotSize, result->__seqMask);
+    result->__slots = calloc(result->__slotCount, result->__slotSize);
     if(!result->__slots){
         cqDelete(result);
         return NULL;
     }
 
-    for(i64 i = 0; i < result->slotCount; i++){
+    for(i64 i = 0; i < result->__slotCount; i++){
         cqSlot_t* slot = (cqSlot_t*)(result->__slots + i * result->__slotSize);
         slot->buff = (i8*)(slot + 1);
         slot->len  = result->slotDataSize;
@@ -66,7 +66,7 @@ cqError_t cqGet(const cq_t* const cq, cqSlot_t** slot_o, const i64 seqNum)
         return cqERANGE;
     }
 
-    if_unlikely(seqNum >= cq->rdSeq + cq->slotCount ){
+    if_unlikely(seqNum >= cq->rdSeq + cq->__slotCount ){
         return cqERANGE;
     }
 
@@ -113,7 +113,10 @@ cqError_t cqAdvWrSeq(cq_t* const cq)
 
     cq->wrSeq = seqNum; //Write pointer has been advanced
     cq->wrMin = seqNum;
-    cq->wrMax = cq->rdSeq + cq->slotCount;
+    cq->wrMax = cq->rdSeq + cq->__slotCount;
+    cq->rdMax = cq->wrMin; //Pushing write forwards means there's more to read
+    cq->outstanding--;
+    cq->readable++;
 
     return cqENOERR;
 }
@@ -158,6 +161,10 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
     cq->rdSeq = seqNum; //Write pointer has been advanced
     cq->rdMin = seqNum;
     cq->rdMax = cq->wrMin + 1;
+    cq->wrMax = cq->wrMin + cq->__slotCount; //... but it does advance this
+    cq->wrRng = cq->wrMax - cq->wrMin; //Maximum writable capacity
+    cq->rdRng = cq->rdMax - cq->rdMin; //Maximum readable capacity
+    cq->readable--;
 
     return cqENOERR;
 }
@@ -186,8 +193,8 @@ static char* errors[cqECOUNT] = {
     "Value is out of range",                //cqERANGE
     "Wrong slot selected",                  //cqEWRONGSLOT
     "PANIC! INTERNAL MEMROY OVERWRITTEN",   //cqEPANIC
-    "Null paramter supplied"                //cqNULLPARAM
-
+    "Null parameter supplied",              //cqNULLPARAM
+    "No change to sequence number",         //cqNOCAHGNE
 };
 
 
@@ -286,6 +293,7 @@ cqError_t cqCommitSlot(cq_t* const cq, const i64 seqNum, const i64 len)
 
     slot->len = len;
     slot->valid = true;
+    cq->outstanding++;
 
     //Now try to advance the write pointer as much as possilbe
     return cqAdvWrSeq(cq);

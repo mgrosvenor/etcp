@@ -134,7 +134,7 @@ etcpError_t remConnMapping(etcpSocket_t* const sock, const uint64_t srcAddr, con
     etcpConnDelete(conn);
 
     //If the srcmap is empty (except for this entry), get rid of it too
-    if_eqlikely(srcsMap->listenQ->slotsUsed == 1){
+    if_eqlikely(srcsMap->listenQ->readable == 1){
         srcsMapDelete(srcsMap);
 
         //And remove it from the destination map
@@ -307,7 +307,7 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
         doEtcpNetRx(listenSock->etcpState); //This is a generic RX function
     }
 
-    if_unlikely(listenQ->slotsUsed == 0){
+    if_unlikely(listenQ->readable == 0){
         return etcpETRYAGAIN; //Nothing here to be collected. Come back another time
     }
 
@@ -408,9 +408,11 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
         return etcpENOERR; //Not trying to RX anything, just triggering a HW rx in case
     }
 
-    i64 maxAckPkts = 0;
-    i64 maxAckSlots = 0;
-    sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->rxQ, sock->sr.recvConn->txQ, &maxAckSlots, &maxAckPkts);
+    i64 maxAckPkts      = 0;
+    i64 maxAckSlots     = 0;
+    i64 maxStaleSlots   = 0;
+    i64 maxStaleAckPkts = 0;
+    sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->rxQ, sock->sr.recvConn->staleQ, sock->sr.recvConn->txQ, &maxAckSlots, &maxAckPkts, &maxStaleSlots, &maxStaleAckPkts);
 
     maxAckPkts = maxAckPkts < 0 ? INT64_MAX : maxAckPkts;
     maxAckSlots = maxAckSlots < 0 ? INT64_MAX : maxAckSlots;
@@ -418,6 +420,11 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
     if_eqlikely(maxAckPkts > 0 && maxAckSlots > 0){
         generateAcks(sock->sr.recvConn,maxAckPkts, maxAckSlots);
     }
+
+    if_eqlikely(maxStaleAckPkts > 0 && maxStaleSlots > 0){
+        generateStaleAcks(sock->sr.recvConn,maxStaleAckPkts, maxStaleSlots);
+    }
+
 
     return doEtcpUserRx(sock->sr.recvConn,data,len_io);
 }

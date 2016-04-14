@@ -38,18 +38,22 @@ typedef struct __attribute__((packed)){
 
 
 typedef struct {
-    i64 slotCount;
+
     i64 slotDataSize;
-    i64 slotsUsed;
     i64 rdMin;
     i64 rdMax;
+    i64 rdRng;
+    i64 readable;
     i64 wrMin;
     i64 wrMax;
+    i64 wrRng;
+    i64 outstanding;
     volatile i64 rdSeq;
     volatile i64 wrSeq;
 
     //__itmes are "private"
     i64 __slotCountLog2;
+    i64 __slotCount; //Users should not need to know this
     i64 __seqMask;
     i64 __slotSize;
     i8* __slots;
@@ -60,7 +64,7 @@ typedef struct {
  * @brief Errors returned by the CQ structure
  */
 typedef enum {
-    cqENOERR,       //!< cqENOERR       Success!
+    cqENOERR = 0,   //!< cqENOERR       Success!
     cqENOMEM,       //!< cqENOMEM       Ran out of memory
     cqENOSLOT,      //!< cqENOSLOT      Ran out of slots, free a slot
     cqETRUNC,       //!< cqETRUNC       Truncated
@@ -68,8 +72,10 @@ typedef enum {
     cqEWRONGSLOT,   //!< cqEWRONGSLOT   This slot is not in the sate we expected
     cqEPANIC,       //!< cqEPANIC       Something bad has happened, user has taken too much memory!
     cqENULLPARAM,    //!< cqNULLPARAM    A parameter supplied was null and it shouldn't be!
-    cqECOUNT,       //!< cqERCOUNT      Total number of error codes.
     cqENOCHANGE,    //!< cqENOCHANGE    No change to the sequence number. Are you sure there's a contiguous slot?
+
+    //THIS MUST BE LAST
+    cqECOUNT,       //!< cqERCOUNT      Total number of error codes.
 } cqError_t;
 
 

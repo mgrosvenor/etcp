@@ -15,6 +15,7 @@
 
 #include "HashTable.h"
 #include "CircularQueue.h"
+#include "LinkedList.h"
 
 
 #define DST_TAB_MAX_LOG2 (17) //2^17 = 128K dst Adrr/Port pairs, 1MB in memory
@@ -31,8 +32,9 @@ typedef struct etcpConn_s etcpConn_t;
 // Receive Transmission Control callback:
 // This function is supplied by the user. It is triggered when there are new packets received (but not necessarily on every
 // new packet. The user's job is to determine how many of these packets will be acknowledged. This is a balancing act. A
-// a packet will not be dequeued and given to the user until it is acknowleged, but collecting more packets before generating
-// an ack can lead to fewer ack packets being sent. The function "returns" two values:
+// a packet will not be dequeued and given to the user until it is acknowledged, but collecting more packets before generating
+// an ack can lead to fewer ack packets being sent which means more efficent network usage. Ultimately this is a latency vs
+// throughput tradeoff. The function "returns" two values:
 // 1) maxAckslots: This limits the number of slots in the receive ring that the generateAcks() function will look at. It may
 //    take the following values: maxAckSlots <0 there is no limit (which practically means the upper number of slots),
 //    maxAckSlots =0, no slots will considered, max be considered this time: >0 maxAckSlots will be considered. The default
@@ -40,9 +42,9 @@ typedef struct etcpConn_s etcpConn_t;
 // 2) MaxAckPkts: This limits the number of AckPackets that will be generated as a result of considering the slots. It may
 //    take the following values: maxAckPkts <0 there is no limit (which practically will be bounded by the number of slots),
 //    maxAckPkts =0, no packets will be generated,  >0 at most maxAckPkts will be generated. The default value is 0.
-typedef void (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o );
+typedef void (*etcpRxTc_f)(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datStaleQ, const cq_t* const ackTxQ, i64* const maxAckSlots_o, i64* const maxAckPkts_o,  i64* const maxStaleSlots_o,  i64* const maxStaleAckPkts_o  );
 
-typedef void (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRxQ, cq_t* ackTxQ, const cq_t* const datRxQ,  bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o );
+typedef void (*etcpTxTc_f)(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRxQ, cq_t* ackTxQ, const cq_t* const datRxQ,  bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o);
 
 
 //The ETCP internal state expects to be provided with hardware send and receive operations, these typedefs spell them out

@@ -23,6 +23,7 @@ void etcpConnDelete(etcpConn_t* const conn)
 
     if_likely(conn->txQ != NULL){ cqDelete(conn->txQ); }
     if_likely(conn->rxQ != NULL){ cqDelete(conn->rxQ); }
+    if_likely(conn->staleQ != NULL){ llDelete(conn->staleQ); }
 
     free(conn);
 
@@ -42,6 +43,12 @@ etcpConn_t* etcpConnNew(etcpState_t* const state, const i64 windowSizeLog2, cons
 
     conn->txQ = cqNew(buffSize,windowSizeLog2);
     if_unlikely(conn->txQ == NULL){
+        etcpConnDelete(conn);
+        return NULL;
+    }
+
+    conn->staleQ = llNew(buffSize);
+    if_unlikely(conn->staleQ == NULL){
         etcpConnDelete(conn);
         return NULL;
     }
