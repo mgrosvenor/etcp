@@ -135,7 +135,7 @@ const char* cqError2Str(cqError_t const err);
 
 
 // *************************************************************************************************************************
-// Non-primitive functions, just wrappers around the previous things
+// Non-primitive functions, just thin wrappers around the previous things
 cqError_t cqPush(cq_t* const cq, const void* __restrict data, i64* const len_io, i64 const seqNum);
 cqError_t cqPull(cq_t* const cq, void* __restrict data, i64* const len_io, i64 const seqNum);
 
@@ -147,7 +147,7 @@ cqError_t cqCommitSlot(cq_t* const cq, const i64 seqNum, const i64 len);
 cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum_o);
 cqError_t cqPullNext(cq_t* const cq, void* __restrict data, i64* const len_io, i64* const seqNum_o);
 cqError_t cqReleaseSlot(cq_t* const cq, const i64 seqNum);
-
+cqError_t cqGetRd(const cq_t* const cq, cqSlot_t** slot_o, const i64 seqNum);
 
 
 #endif /* CIRCULARQUEUE_H_ */

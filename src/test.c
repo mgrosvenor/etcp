@@ -34,7 +34,7 @@ int etcptpTestClient()
 {
     //Open the connection
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpConnect(sock,4,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
+    etcpConnect(sock,2,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
 
     i64 len = 128;
     i8 dat[len];
@@ -43,12 +43,16 @@ int etcptpTestClient()
     }
 
 
-    while(1){
+    i64 i = 1;
+    for(;;i++){
         //Write to the connection
+        DBG("Client sending packet %li\n", i);
         etcpSend(sock,dat,&len);
 
         //Trigger an RX to see if there is an ack
         etcpRecv(sock,NULL,NULL);
+
+        sleep(5); //Rest for a bit
     }
     //Close the connection
     etcpClose(sock);
@@ -60,15 +64,15 @@ int etcptpTestServer()
 {
     //Open a socket and bind it
     etcpSocket_t* sock = etcpSocketNew(etcpState);
-    etcpBind(sock,4,2048,0x000002,0x00000E, -1, -1);
+    etcpBind(sock,2,2048,0x000002,0x00000E, -1, -1);
 
     //Tell the socket to list
-    etcpListen(sock,8);
+    etcpListen(sock,2);
 
     etcpSocket_t* accSock = NULL;
     etcpError_t accErr = etcpETRYAGAIN;
     for( accErr = etcpETRYAGAIN; accErr == etcpETRYAGAIN; accErr = etcpAccept(sock,&accSock)){
-        sleep(1);
+        __asm__ __volatile__ ("pause"); //Tell CPU to relax
     }
     if(accErr != etcpENOERR){
         ERR("Something broke on accept!\n");
@@ -81,7 +85,7 @@ int etcptpTestServer()
         i64 len = 128;
         etcpError_t recvErr = etcpETRYAGAIN;
         for(recvErr = etcpETRYAGAIN; recvErr == etcpETRYAGAIN; recvErr = etcpRecv(accSock,&data,&len)){
-            sleep(1);
+            __asm__ __volatile__ ("pause"); //Tell CPU to relax
         }
 
         if(recvErr != etcpENOERR){
@@ -144,7 +148,7 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datSt
     }
 
     llSlot_t* slot = NULL;
-    for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; llGetNext(datStaleQ,&slot) ){
+    for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; err = llGetNext(datStaleQ,&slot) ){
         etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
         switch(head->fulltype){
             //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
@@ -164,10 +168,10 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datSt
         }
     }
 
-    *maxAckPkts_o      = 1;
-    *maxAckSlots_o     = 1;
-    *maxStaleSlots_o   = 1;
-    *maxStaleAckPkts_o = 1;
+    *maxAckPkts_o      = -1;
+    *maxAckSlots_o     = -1;
+    *maxStaleSlots_o   = -1;
+    *maxStaleAckPkts_o = -1;
 }
 
 void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRxQ, cq_t* ackTxQ, const cq_t* const datRxQ,  bool* const ackFirst, i64* const maxAck_o, i64* const maxDat_o)
@@ -177,8 +181,9 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     (void)datRxQ;
 
     //Send all acks immediately
-    int i = 0;
+    i64 maxAck = 0;
     if(ackTxQ){
+        i64 i = 0;
         for(i = ackTxQ->rdMin; i < ackTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGet(ackTxQ,&slot,i);
@@ -190,17 +195,19 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
                 pbuff->txState = ETCP_TX_NOW;
             }
         }
+        maxAck = i - ackTxQ->rdMin;
     }
-    *maxAck_o = i;
+    *maxAck_o = maxAck;
     *ackFirst = true;
 
-    const i64 retransmitTimeOut = 10 * 1000; //10us RTO timeout
+    const i64 retransmitTimeOut = 10 * 1000 * 1000 * 1000; //10s RTO timeout
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
 
-    i = 0;
+    i64 maxDat = 0;
     if(datTxQ){
+        i64 i = 0;
         for(i = datTxQ->rdMin; i < datTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
             cqError_t cqe = cqGet(datTxQ,&slot,i);
@@ -216,14 +223,23 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
             const i64 swTxTimeNs  = pbuff->etcpHdr->ts.swTxTimeNs;
             const i64 txTimeoutNs = swTxTimeNs + txAttempts * retransmitTimeOut; //calculate when this packet should try again
 
+            if(txAttempts > 0){
+                //Slow down a bit, we're sending too hard and not getting acks
+                DBG("Slowing down txAttempts=%li\n", txAttempts);
+                usleep(1);
+            }
+
             if(txAttempts == 0 || txTimeoutNs < timeNowNs ){
                 pbuff->txState = ETCP_TX_NOW;
             }
 
         }
+
+        maxDat = i - datTxQ->rdMin;
     }
 
-    *maxDat_o = i;
+
+    *maxDat_o = maxDat;
 }
 
 
@@ -235,7 +251,7 @@ static int64_t exanicTx(void* const hwState, const void* const data, const int64
 {
     exaNicState_t* const exaNicState = hwState;
 
-    hexdump(data,len);
+    //hexdump(data,len);
     ssize_t result = exanic_transmit_frame(exaNicState->txBuff,(const char*)data, len);
     const uint32_t txTimeCyc = exanic_get_tx_timestamp(exaNicState->txBuff);
     *hwTxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, txTimeCyc);
@@ -252,7 +268,7 @@ static int64_t exanicRx(void* const hwState, void* const data, const int64_t len
     ssize_t result = exanic_receive_frame(exaNicState->rxBuff, (char*)data, len, &rxTimeCyc);
     *hwRxTimeNs = exanic_timestamp_to_counter(exaNicState->dev, rxTimeCyc);
 
-    if(result > 0){
+//    if(result > 0){
 //        printf("Dumping packet state\n");
 //        hexdump(data,result);
 //
@@ -262,7 +278,7 @@ static int64_t exanicRx(void* const hwState, void* const data, const int64_t len
 //        }
 //        printf("};\n");
 //        printf("Done dumping state\n");
-    }
+//    }
 
 
     //*hwRxTimeNs = -1;

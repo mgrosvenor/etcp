@@ -14,6 +14,7 @@
 #include <stdbool.h>
 
 typedef enum {
+    DBGMODE_HEX,
     DBGMODE_DBG,
     DBGMODE_ERR,
     DBGMODE_WARN,
@@ -48,7 +49,7 @@ i64 _debug_out_(
     #define DBG2( /*format, args*/...)
 #endif
 
-void hexdump(const void *data, int size);
-
+void _hexdump(const int line, const char* const __restrict file , const char* const __restrict func , const void* const __restrict data, const int size);
+#define hexdump(data, size) _hexdump(__LINE__, __FILE__, __FUNCTION__, data, size)
 
 #endif /* DEBUG_H_ */

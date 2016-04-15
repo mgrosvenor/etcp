@@ -35,7 +35,7 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCountLog2)
     result->__slotSize      = buffSize + sizeof(cqSlot_t);
     result->__slotSize      = (result->__slotSize + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) -1 ); //Round up nearest word size
 
-    DBG("Allocating %li slots of size %li for %liB with mask=%016x\n",  result->__slotCount  , result->__slotSize,  result->__slotCount * result->__slotSize, result->__seqMask);
+    //DBG("Allocating %li slots of size %li for %liB with mask=%016x\n",  result->__slotCount  , result->__slotSize,  result->__slotCount * result->__slotSize, result->__seqMask);
     result->__slots = calloc(result->__slotCount, result->__slotSize);
     if(!result->__slots){
         cqDelete(result);
@@ -47,6 +47,15 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCountLog2)
         slot->buff = (i8*)(slot + 1);
         slot->len  = result->slotDataSize;
     }
+
+
+    result->rdMin = 0;
+    result->rdMax = 0;
+    result->rdSeq = 0;
+    result->wrSeq = 0; //Write pointer has been advanced
+    result->wrMin = 0;
+    result->wrMax = result->rdSeq + result->__slotCount;
+    result->rdMax = result->wrMin; //Pushing write forwards means there's more to read
 
     return result;
 
@@ -73,7 +82,7 @@ cqError_t cqGet(const cq_t* const cq, cqSlot_t** slot_o, const i64 seqNum)
     //Passed all the checks, this seqNumber is in the right range, turn it into a slot index.
     const i64 idx = ( seqNum & cq->__seqMask);
 
-    DBG("Getting item at index =%li (seq=%li)\n", idx, seqNum);
+    //DBG("Getting item at index =%li (seq=%li)\n", idx, seqNum);
     *slot_o = (cqSlot_t*)(cq->__slots + idx * cq->__slotSize);
 
     return cqENOERR;
@@ -377,4 +386,19 @@ cqError_t cqReleaseSlot(cq_t* const cq, const i64 seqNum)
    return cqAdvRdSeq(cq);
 }
 
+//This is the same as the "cqGet" function, but it also checks that the slot is readable (ie, has valid data in it)
+cqError_t cqGetRd(const cq_t* const cq, cqSlot_t** slot_o, const i64 seqNum)
+{
+    cqError_t err = cqGet(cq,slot_o,seqNum);
+    if_unlikely(err != cqENOERR){
+        return err;
+    }
 
+    const cqSlot_t* const slot = *slot_o;
+    if_unlikely(!slot->valid){
+        return cqEWRONGSLOT;
+    }
+
+    return cqENOERR;
+
+}

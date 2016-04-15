@@ -34,10 +34,11 @@ i64 _debug_out_(
     char* fn =  (char*)filename;
     char* mode_str = NULL;
     switch(mode){
-        case DBGMODE_FAT:   mode_str = "Fatal"; break;
-        case DBGMODE_ERR:   mode_str = "Error"; break;
-        case DBGMODE_DBG:   mode_str = "Debug"; break;
-        case DBGMODE_WARN:  mode_str = "Warning:"; break;
+        case DBGMODE_HEX:   mode_str = "Hexdump"; break;
+        case DBGMODE_FAT:   mode_str = "Fatal  "; break;
+        case DBGMODE_ERR:   mode_str = "Error  "; break;
+        case DBGMODE_DBG:   mode_str = "Debug  "; break;
+        case DBGMODE_WARN:  mode_str = "Warning"; break;
     }
     if(info) dprintf(OUTPUT_TO,"[%s - %s:%i:%s()]  ", mode_str, basename(fn), (int)line_num, function);
     i64 result = vdprintf(OUTPUT_TO,format,args);
@@ -50,7 +51,7 @@ i64 _debug_out_(
     return result;
 }
 
-void hexdump(const void* const data, int size)
+void _hexdump(const int line, const char* const __restrict file , const char* const __restrict func , const void* const __restrict data, const int size)
 {
     /* dumps size bytes of *data to stdout. Looks like:
      * [0000] 75 6E 6B 6E 6F 77 6E 20 30 FF 00 00 00 00 39 00 unknown 0.....9.
@@ -84,7 +85,7 @@ void hexdump(const void* const data, int size)
 
         if(n%16 == 0) {
             /* line completed */
-            ERR2("[%4.4s]   %-50.50s  %s\n", addrstr, hexstr, charstr);
+            _debug_out_(true,DBGMODE_HEX,line,file,func,"[%4.4s]   %-50.50s  %s\n", addrstr, hexstr, charstr);
             hexstr[0] = 0;
             charstr[0] = 0;
         } else if(n%8 == 0) {
@@ -97,6 +98,6 @@ void hexdump(const void* const data, int size)
 
     if (strlen(hexstr) > 0) {
         /* print rest of buffer if not empty */
-        ERR2("[%4.4s]   %-50.50s  %s\n", addrstr, hexstr, charstr);
+        _debug_out_(true,DBGMODE_HEX,line,file,func,"[%4.4s]   %-50.50s  %s\n", addrstr, hexstr, charstr);
     }
 }

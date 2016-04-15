@@ -244,6 +244,7 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSizeLog2, co
         return etcpEWRONGSOCK;
     }
 
+    DBG("Setting up a new listening address with window size %li\n", windowSizeLog2);
     etcpLAMap_t* const srcsMap = srcsMapNew(windowSizeLog2,buffSize,vlan,priority);
     if_unlikely(!srcsMap){
         WARN("Ran out of memory making new sources connections container\n");
@@ -269,7 +270,7 @@ etcpError_t etcpBind(etcpSocket_t* const sock, const uint32_t windowSizeLog2, co
 
 //Tell the socket to start accepting connections. Backlog sets the length of the queue for unaccepted connections
 //Maximum backlog 4 billion...
-etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlog)
+etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlogLog2)
 {
 
     if_unlikely(sock->type != ETCPSOCK_LA){
@@ -277,7 +278,7 @@ etcpError_t etcpListen(etcpSocket_t* const sock, uint32_t backlog)
         return etcpEWRONGSOCK;
     }
 
-    sock->la->listenQ = cqNew(sizeof(etcpConn_t*), backlog + 1);
+    sock->la->listenQ = cqNew(sizeof(etcpConn_t*), backlogLog2);
     if_unlikely(!sock->la->listenQ){
         WARN("Ran out of memory trying to allocate new listener queue\n");
         return etcpENOMEM;
@@ -339,6 +340,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     }
 
     if(toSendData != NULL && *toSendLen_io > 0){
+        DBG("Triggering user TX with packet of legth %li\n", *toSendLen_io);
         doEtcpUserTx(sock->sr.sendConn,toSendData,toSendLen_io);
     }
 
@@ -352,6 +354,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     cq_t* recvRxQ = sock->sr.recvConn ? sock->sr.recvConn->rxQ : NULL; //Inboud DAT queue
 
     //If TX is event triggered then do it now, this is the event!
+    DBG("Running TX traffic control\n");
     if(sock->etcpState->eventTriggeredTx){
         sock->etcpState->etcpTxTc(
                 sock->etcpState->etcpTxTcState,
@@ -367,6 +370,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     maxAck = maxAck < 0 ? INT64_MAX : maxAck;
     maxDat = maxDat < 0 ? INT64_MAX : maxDat;
 
+    DBG("Running %li acks and %li dats, with ackfirst=%li\n",maxAck, maxDat,ackFirst );
     if(maxAck > 0 || maxDat > 0){
         if_eqlikely(ackFirst){
             if_eqlikely(sock->sr.recvConn){
@@ -400,13 +404,21 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
     }
 
     //If RX is event triggered then do it now, this is the event!
+    i64 rxPackets = 0;
     if_eqlikely(sock->etcpState->eventTriggeredRx){
-        doEtcpNetRx(sock->etcpState); //This is a generic RX function
+        rxPackets = doEtcpNetRx(sock->etcpState); //It doesn't matter how much we receive here
     }
 
-    if(data == NULL || len_io == NULL || *len_io == 0){
-        return etcpENOERR; //Not trying to RX anything, just triggering a HW rx in case
+    if_eqlikely(data == NULL || len_io == NULL || *len_io == 0){
+        //Not trying to RX anything, just triggering a HW rx in case, but check if there is something for the user
+        return etcpENOERR;
     }
+
+    if(rxPackets == 0 && sock->sr.recvConn->rxQ->readable == 0){
+        //We didn't get anything new, and there's nothing waiting, so there's nothing to do
+        return etcpETRYAGAIN;
+    }
+
 
     i64 maxAckPkts      = 0;
     i64 maxAckSlots     = 0;
@@ -414,8 +426,10 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
     i64 maxStaleAckPkts = 0;
     sock->etcpState->etcpRxTc(sock->etcpState->etcpRxTcState, sock->sr.recvConn->rxQ, sock->sr.recvConn->staleQ, sock->sr.recvConn->txQ, &maxAckSlots, &maxAckPkts, &maxStaleSlots, &maxStaleAckPkts);
 
-    maxAckPkts = maxAckPkts < 0 ? INT64_MAX : maxAckPkts;
-    maxAckSlots = maxAckSlots < 0 ? INT64_MAX : maxAckSlots;
+    maxAckPkts = maxAckPkts < 0 ? sock->sr.recvConn->rxQ->__slotCount : maxAckPkts; //1 packet per slot is the maximum
+    maxAckSlots = maxAckSlots < 0 ? sock->sr.recvConn->rxQ->__slotCount : maxAckSlots;
+    maxStaleAckPkts = maxStaleAckPkts < 0 ? sock->sr.recvConn->staleQ->slotCount : maxStaleAckPkts;
+    maxStaleSlots = maxStaleSlots < 0 ? sock->sr.recvConn->staleQ->slotCount : maxStaleSlots;
 
     if_eqlikely(maxAckPkts > 0 && maxAckSlots > 0){
         generateAcks(sock->sr.recvConn,maxAckPkts, maxAckSlots);
