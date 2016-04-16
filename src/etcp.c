@@ -587,6 +587,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1;
+        expectSeqNum++;
     }
 
     //Push the last sack out

@@ -143,8 +143,7 @@ llError_t llPushSeqOrd(ll_t* const ll, const void* const data, i64* const len_io
     }
 
     //We have a head, check if this seqNum is less than or equalt to head, if so, insert it
-    //This means that the most recent value will always be closest to the head
-    if_eqlikely(seqNum <= slot->seqNum){
+    if_eqlikely(seqNum < slot->seqNum){
         new->__next = ll->__head;
         ll->__head = new;
         ll->slotCount++;
@@ -162,8 +161,7 @@ llError_t llPushSeqOrd(ll_t* const ll, const void* const data, i64* const len_io
         }
 
         //Check if the new slot should go next
-        //This means that the most recent value will always be closest to the head
-        if_eqlikely(seqNum <= slot->__next->seqNum){
+        if_eqlikely(seqNum < slot->__next->seqNum){
             //Do the insert
             new->__next = slot->__next;
             slot->__next = new;
