@@ -200,7 +200,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     *maxAck_o = maxAck;
     *ackFirst = true;
 
-    const i64 retransmitTimeOut = 10 * 1000 * 1000 * 1000; //10s RTO timeout
+    const i64 retransmitTimeOut = 10 * 1000 * 1000 * 1000LL; //10s RTO timeout
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;

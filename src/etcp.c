@@ -98,10 +98,16 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         return etcpERANGE;
     }
 
-
     if_unlikely(seqPkt < seqMin){
         WARN("Stale packet, seqPkt %li < %li seqMin, packet has already been ack'd\n", seqPkt, seqMin);
-        //We can't ignore these because the send side might be waiting for a lost ack, which will hold up new TX's
+
+        if_eqlikely(datHdr->noAck){
+            //This packet does not want an ack, and it's stale, so just ignore it
+            return etcpECQERR;;
+        }
+
+        //Packet does want an ack. We can't ignore these because the send side might be waiting for a lost ack, which will
+        //hold up new TX's
         //Note: This is a slow-path, a ordered push to a LL O(n) + malloc() is more costly a push to the CQ O(c).
 
         i64 toCopy    = len; //By now this value has been checked to be right
@@ -487,7 +493,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
 
     i64 fieldIdx          = 0;
     bool fieldInProgress  = false;
-    i64  currSeqNum       = 0;
+    i64  expectSeqNum       = 0;
     i64 unsentAcks        = 0;
     const i64 tmpBuffSize = sizeof(etcpMsgSackHdr_t) + sizeof(etcpSackField_t) * ETCP_MAX_SACKS;
     assert(sizeof(tmpBuffSize) <=  256);
@@ -531,36 +537,35 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         if_unlikely(err != llENOERR){
             break;
         }
-
+        
+        //The next sequence we get should be either equalt to the expected sequence
         if_unlikely(i == 0){
-            currSeqNum = slot->seqNum -1; --bugs ugs bugs
-            sackHdr->sackBaseSeq = slot->seqNum;
+            expectSeqNum = slot->seqNum;
         }
         const i64 seqNum = slot->seqNum;
 
         DBG("Now looking at seq %i\n", seqNum);
 
-        if_unlikely(seqNum < currSeqNum ){
-            //Make sure all the cases are handled!
-            FAT("This should not happen, it means there's been an ordering violation in the stale queue\n");
+        if_unlikely(seqNum < expectSeqNum){
+            if(seqNum == expectSeqNum -1){
+                WARN("Duplicate entries for sequence number %li in stale queue, igoring this one\n", seqNum);
+                llReleaseHead(conn->staleQ); //We're done with this packet, throw away
+                continue;
+
+            }
+
+            FAT("This should not happen, sequence numbers have gone backwards from %li to %li. This means there's been an ordering violation in the stale queue\n", seqNum, expectSeqNum);
             return etcpEFATAL;
         }
 
-        if_unlikely(seqNum == currSeqNum){
-            WARN("Duplicate retransmit! This can happen with severe delays but it should be very unusual\n!");
-            llReleaseHead(conn->staleQ); //We're done with this packet, throw away
-            continue;
-        }
-
         //There is a break in the sequence number series. Start/finish a sack field
-        if_eqlikely(seqNum > currSeqNum + 1){
+        if_eqlikely(seqNum > expectSeqNum){
             //The slot is empty --
             if_likely(fieldInProgress){
                 fieldIdx++;
                 fieldInProgress = false;
-                currSeqNum = seqNum;
+                expectSeqNum = seqNum; //Jump the expected value up to the new value
             }
-            continue; --bugs bugs bugs
         }
 
         //At this point we have a valid packet
@@ -568,21 +573,11 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
         etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
 
-        if_eqlikely(datHdr->noAck){
-            //This packet does not want an ack
-            if_likely(fieldInProgress){
-                fieldIdx++;
-                fieldInProgress = false;
-            }
-            llReleaseHead(conn->staleQ); //We're done with this packet, throw away
-            continue;
-        }
-
         //Start a new field
         if_unlikely(!fieldInProgress){
             if_unlikely(fieldIdx == 0){
                 sackHdr->timeFirst = head->ts;
-                sackHdr->sackBaseSeq = conn->seqAck;
+                sackHdr->sackBaseSeq = seqNum;
             }
 
             sackFields[fieldIdx].offset = datHdr->seqNum - sackHdr->sackBaseSeq;
@@ -606,10 +601,6 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
             ERR("Unexpected error making ack packet\n");
             return err;
         }
-
-        //Account for the now sent messages by updating the seqAck value, only do so up to the edge of the first field, this
-        //is the limit that will be receivable until new packets come.
-        conn->seqAck = conn->seqAck + sackFields[0].offset + sackFields[0].count;
     }
     return etcpENOERR;
 
