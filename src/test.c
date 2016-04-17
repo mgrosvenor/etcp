@@ -52,7 +52,7 @@ int etcptpTestClient()
         //Trigger an RX to see if there is an ack
         etcpRecv(sock,NULL,NULL);
 
-        sleep(5); //Rest for a bit
+        //sleep(5); //Rest for a bit
     }
     //Close the connection
     etcpClose(sock);
@@ -200,7 +200,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     *maxAck_o = maxAck;
     *ackFirst = true;
 
-    const i64 retransmitTimeOut = 10 * 1000 * 1000 * 1000LL; //10s RTO timeout
+    const i64 retransmitTimeOut = 2 * 1000 * 1000 * 1000LL; //2s RTO timeout
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
@@ -220,17 +220,20 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
             }
 
             const i64 txAttempts  = pbuff->etcpDatHdr->txAttempts;
+
+
+            if(txAttempts == 0){
+                pbuff->txState = ETCP_TX_NOW;
+                continue;
+            }
             const i64 swTxTimeNs  = pbuff->etcpHdr->ts.swTxTimeNs;
             const i64 txTimeoutNs = swTxTimeNs + txAttempts * retransmitTimeOut; //calculate when this packet should try again
-
-            if(txAttempts > 0){
-                //Slow down a bit, we're sending too hard and not getting acks
+            if(txAttempts > 0 &&  txTimeoutNs < timeNowNs){
+                //Slow down a bit, we're sending too hard and not getting acks -- This is where the standard TCP congestion
+                //control would kick in, we've detected loss in the network
                 DBG("Slowing down txAttempts=%li\n", txAttempts);
-                usleep(1);
-            }
-
-            if(txAttempts == 0 || txTimeoutNs < timeNowNs ){
                 pbuff->txState = ETCP_TX_NOW;
+                usleep(1);
             }
 
         }

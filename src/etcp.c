@@ -149,14 +149,15 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
 static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime, const etcpTime_t* const datFirstTime, const etcpTime_t* const datLastTime)
 {
-    DBG("Ack'ing packet with seq=%li\n", seq);
-    cqSlot_t* slot = NULL;
-    const cqError_t err = cqGetRd(cq,&slot,seq);
-    if_unlikely(err == cqEWRONGSLOT){
-        WARN("Got an (duplicate) ACK for a packet that's gone.\n");
+    DBG("Processing ack for seq=%li\n", seq);
+    if(seq < (uint64_t)cq->rdMin){
+        DBG("Stale ack, this ack has already been accepted\n");
         return etcpENOERR;
     }
-    else if_unlikely(err != cqENOERR){
+
+    cqSlot_t* slot = NULL;
+    const cqError_t err = cqGetRd(cq,&slot,seq);
+    if_unlikely(err != cqENOERR){
         WARN("Error getting value from Circular Queue: %s", cqError2Str(err));
         return etcpECQERR;
     }
@@ -266,7 +267,7 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
     for(i64 sackIdx = 0; sackIdx < sackHdr->sackCount; sackIdx++){
         const uint16_t ackOffset = sackFields[sackIdx].offset;
         const uint16_t ackCount  = sackFields[sackIdx].count;
-        DBG("Working on ACKs between %li and %li\n", sackBaseSeq + ackOffset, sackBaseSeq + ackOffset + ackCount);
+        DBG("Working on %lli ACKs starting at %li \n", ackCount, sackBaseSeq + ackOffset);
         for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
             const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
             etcpProcessAck(conn->txQ,ackSeq,&head->ts, &sackHdr->timeFirst, &sackHdr->timeLast);
@@ -743,7 +744,7 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
 
     for(i64 i = cq->rdMin; i < cq->rdMax && i < cq->rdMin + maxSlots; i++){
         const cqError_t err = cqGetRd(cq,&slot,i);
-        DBG("Sending packet %li\n", i);
+        DBG("Looking at seq/slot %li\n", i);
         if_eqlikely(err == cqEWRONGSLOT){
             //The slot is empty
             continue;
@@ -758,13 +759,19 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
 
         if_eqlikely(pBuff->txState == ETCP_TX_DRP ){
             //We're told to drop the packet. Release it and continue
-            DBG("Dropping packet %li\n", i);
+            DBG("Dropping seq/slot %li\n", i);
             cqReleaseSlot(cq,i);
             continue;
         }
         else if_unlikely(pBuff->txState != ETCP_TX_NOW ){
+            DBG("Ingnoring seq/slot %li\n", i);
             continue; //Not ready to send this packet now.
         }
+
+        //before the packet is sent, make it ready to send again in the future just in case something goes wrong
+        pBuff->txState = ETCP_TX_RDY;
+
+        DBG("Sending seq/slot %li\n", i);
 
         switch(pBuff->etcpHdr->type){
             case ETCP_DAT:{
@@ -794,8 +801,6 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
             }
         }
 
-        //before the packet is sent, make it ready to send again in the future just in case something goes wrong
-        pBuff->txState = ETCP_TX_RDY;
 
         uint64_t hwTxTimeNs = 0;
         const pBuff_t* const pbuff = slot->buff;
