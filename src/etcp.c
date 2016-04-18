@@ -492,6 +492,8 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         return etcpENOERR; //There's nothing to do here
     }
 
+    DBG("Generating at most %li stale sack packets from %li slots\n", maxAckPackets, maxSlots);
+
     i64 fieldIdx          = 0;
     bool fieldInProgress  = false;
     i64  expectSeqNum       = 0;
@@ -545,7 +547,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         }
         const i64 seqNum = slot->seqNum;
 
-        DBG("Now looking at seq %i\n", seqNum);
+        DBG("Now looking at seq %i, expected=%li\n", seqNum, expectSeqNum);
 
         if_unlikely(seqNum < expectSeqNum){
             if(seqNum == expectSeqNum -1){
@@ -579,16 +581,20 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
             if_unlikely(fieldIdx == 0){
                 sackHdr->timeFirst = head->ts;
                 sackHdr->sackBaseSeq = seqNum;
+                DBG("Staring new stale sack packet with sack base = %li\n", sackHdr->sackBaseSeq);
             }
 
             sackFields[fieldIdx].offset = datHdr->seqNum - sackHdr->sackBaseSeq;
             sackFields[fieldIdx].count = 0;
+            fieldInProgress = true;
+            DBG("Starting new sack field indx=%li, offset = %li\n", fieldIdx, sackFields[fieldIdx].offset);
         }
         unsentAcks++;
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1;
         expectSeqNum++;
+        DBG("Accepted sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
     }
 
     //Push the last sack out

@@ -36,7 +36,7 @@ int etcptpTestClient()
     etcpSocket_t* sock = etcpSocketNew(etcpState);
     etcpConnect(sock,2,2048,0x000001,0x00000F, 0x0000002, 0x00000E, true, -1, -1);
 
-    i64 len = 128;
+    const i64 len = 128;
     i8 dat[len];
     for(int i = 0; i < len; i++){
         dat[i] = 0xAA + i;
@@ -45,11 +45,14 @@ int etcptpTestClient()
 
     i64 pkts = 0;
     i64 i = 1;
-    for(;i<16;i++){
+    for(;i<16000;i++){
         //Write to the connection
+
         DBG("Client sending packet %li\n", pkts);
-        etcpSend(sock,dat,&len);
-        if(len > 0){
+        i64 toSendLen = len;
+        etcpSend(sock,dat,&toSendLen);
+        if(toSendLen > 0){
+            DBG("Sent %li bytes\n", toSendLen);
             pkts++;
         }
 
@@ -84,7 +87,7 @@ int etcptpTestServer()
     }
 
 
-    for(int i = 0; i < 50; i++){
+    for(int i = 0; i < 500000; i++){
         i8 data[128] = {0};
         i64 len = 128;
         etcpError_t recvErr = etcpETRYAGAIN;
@@ -164,7 +167,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
         i64 i = 0;
         for(i = ackTxQ->rdMin; i < ackTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGet(ackTxQ,&slot,i);
+            cqError_t cqe = cqGetRd(ackTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }
@@ -178,7 +181,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     *maxAck_o = maxAck;
     *ackFirst = true;
 
-    const i64 retransmitTimeOut = 2 * 1000 * 1000 * 1000LL; //2s RTO timeout
+    const i64 retransmitTimeOut = 100 * 1000 * 1000LL; //1ms RTO timeout
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;
@@ -188,7 +191,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
         i64 i = 0;
         for(i = datTxQ->rdMin; i < datTxQ->rdMax; i++){
             cqSlot_t* slot = NULL;
-            cqError_t cqe = cqGet(datTxQ,&slot,i);
+            cqError_t cqe = cqGetRd(datTxQ,&slot,i);
             if(cqe != cqENOERR){
                 break;
             }
@@ -209,9 +212,12 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
             if(txAttempts > 0 &&  txTimeoutNs < timeNowNs){
                 //Slow down a bit, we're sending too hard and not getting acks -- This is where the standard TCP congestion
                 //control would kick in, we've detected loss in the network
-                DBG("Slowing down txAttempts=%li\n", txAttempts);
+                DBG("PACKET LOST Seq=%li type=%li! txAttempts=%li Time in queue = %lins (%lius)\n", i, pbuff->etcpHdr->type, txAttempts, timeNowNs - swTxTimeNs, (timeNowNs - swTxTimeNs) / 1000);
                 pbuff->txState = ETCP_TX_NOW;
-                usleep(1);
+                //usleep(1);
+                if(txAttempts > 10){
+                    exit(-1);
+                }
             }
 
         }
