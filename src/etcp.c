@@ -640,6 +640,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         //We collected enough sack fields to make a whole packet and send it
         if_unlikely(fieldIdx >= ETCP_MAX_SACKS){
             //sackHdr->rxWindowSegs = 0;
+            DBG("Sending sack packet\n");
             etcpError_t err = pushSackEthPacket(conn,tmpBuff,ETCP_MAX_SACKS);
             if_unlikely(err == etcpETRYAGAIN){
                 WARN("Ran out of slots for sending acks, come back again\n");
@@ -689,13 +690,18 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
         etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
 
+        if_eqlikely(datHdr->ackSent){
+            //This packet has been processed and ack'd, we're just waiting for it to be cleared from the window by a user RX
+            continue;
+        }
+
         if_eqlikely(datHdr->noAck){
-            //This packet does not want an ack
+            //This packet does not want an ack,
             if_likely(fieldInProgress){
                 fieldIdx++;
                 fieldInProgress = false;
             }
-            cqCommitSlot(conn->rxQ,i,slot->len); //We're done with this packet, it can be RX'd now
+            datHdr->ackSent = 1; //Pretend to have sent it so it will get delivered to users
             continue;
         }
 
@@ -704,20 +710,27 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
             if_unlikely(fieldIdx == 0){ //If we're starting a new sack packet, we need some extra fields
                 sackHdr->timeFirst    = head->ts;
                 sackHdr->sackBaseSeq  = conn->seqAck;
+                DBG("Staring new sack packet with sack base = %li\n", sackHdr->sackBaseSeq);
             }
+
 
             sackFields[fieldIdx].offset = datHdr->seqNum - conn->seqAck;
             sackFields[fieldIdx].count = 0;
+            fieldInProgress = true;
+            DBG("Starting new sack field indx=%li, offset = %li\n", fieldIdx, sackFields[fieldIdx].offset);
+
         }
         unsentAcks++;
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
-        datHdr->ackSent = 1;
+        datHdr->ackSent = 1; //Mark the packet as ack-sent so it will get delivered to users
+        DBG("Accepted sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
     }
 
     //Push the last sack out
     if(unsentAcks > 0){
         sackHdr->sackCount = fieldIdx+1;
+        DBG("Sending sack packet\n");
         etcpError_t err = pushSackEthPacket(conn,tmpBuff,fieldIdx+1);
         if_unlikely(err == etcpETRYAGAIN){
             WARN("Ran out of slots for sending acks, come back again\n");
@@ -744,7 +757,6 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
 
     for(i64 i = cq->rdMin; i < cq->rdMax && i < cq->rdMin + maxSlots; i++){
         const cqError_t err = cqGetRd(cq,&slot,i);
-        DBG("Looking at seq/slot %li\n", i);
         if_eqlikely(err == cqEWRONGSLOT){
             //The slot is empty
             continue;
@@ -753,6 +765,8 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
             ERR("Error getting slot: %s\n", cqError2Str(err));
             return etcpECQERR;
         }
+
+        DBG("Trying to send seq/slot %li\n", i);
 
         //We've now got a valid slot with a packet in it, grab it and see if the TC has decided it should be sent?
         pBuff_t* const pBuff = slot->buff;
@@ -880,6 +894,8 @@ i64 doEtcpNetRx(etcpState_t* state)
 //This is a user facing function
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
 {
+
+    DBG("Doing user rx\n");
     while(1){
         i64 seqNum = -1;
         cqSlot_t* slot;
@@ -892,6 +908,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
             ERR("Error on circular buffer: %s\n", cqError2Str(cqErr));
             return etcpECQERR;
         }
+        DBG("Got packet with sequence number %li\n",seqNum);
 
         const i64 msgHdrs = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
         if_unlikely(slot->len < msgHdrs){
@@ -907,10 +924,16 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
             return etcpEBADPKT;
         }
 
-
         //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){
+            DBG("Packet has not been ack'd\n");
             return etcpETRYAGAIN; //Ack has not yet been made for this, cannot give over to the user until it has
+        }
+
+        if(datHdr->staleDat){
+            DBG("Releasing stale packet\n");
+            cqReleaseSlot(conn->rxQ,seqNum);
+            continue; //The packet is stale, so release it, but get another one
         }
 
         const i8* dat = (i8*)(datHdr + 1);
@@ -918,11 +941,13 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
         //Looks ok, give the data over to the user
         memcpy(data,dat,MIN(datHdr->datLen,*len_io));
 
-        cqReleaseSlot(conn->rxQ,seqNum);
-        if(datHdr->staleDat){
-            continue; //The packet is stale, so release it, but get another one
+        cqErr = cqReleaseSlot(conn->rxQ,seqNum);
+        if(cqErr != cqENOERR){
+            WARN("Unexpected error releasing slot %li: %s\n", seqNum, cqError2Str(cqErr));
+            return etcpECQERR;
         }
 
+        DBG("Packet with seq=%li and len=%li given to user\n", seqNum, *len_io);
         //We've copied a valid packet and released it, the user can have it now
         return etcpENOERR;
     }

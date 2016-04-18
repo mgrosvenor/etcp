@@ -47,6 +47,7 @@ typedef struct {
     i64 wrMin;
     i64 wrMax;
     i64 wrRng;
+    i64 available;
     i64 outstanding;
     volatile i64 rdSeq;
     volatile i64 wrSeq;
@@ -68,7 +69,8 @@ typedef enum {
     cqENOMEM,       //!< cqENOMEM       Ran out of memory
     cqENOSLOT,      //!< cqENOSLOT      Ran out of slots, free a slot
     cqETRUNC,       //!< cqETRUNC       Truncated
-    cqERANGE,       //!< cqERANGE       Out of range!
+    cqERANGEHI,     //!< cqERANGE       Out of range! Too high.
+    cqERANGELO,     //!< cqERANGE       Out of range! Too low.
     cqEWRONGSLOT,   //!< cqEWRONGSLOT   This slot is not in the sate we expected
     cqEPANIC,       //!< cqEPANIC       Something bad has happened, user has taken too much memory!
     cqENULLPARAM,    //!< cqNULLPARAM    A parameter supplied was null and it shouldn't be!

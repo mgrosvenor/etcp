@@ -404,6 +404,10 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
     }
 
     //If RX is event triggered then do it now, this is the event!
+    if(sock->sr.recvConn->rxQ->available == 0){ //There's no more RX slot, don't even bother
+        return etcpETRYAGAIN;
+    }
+
     i64 rxPackets = 0;
     if_eqlikely(sock->etcpState->eventTriggeredRx){
         rxPackets = doEtcpNetRx(sock->etcpState); //It doesn't matter how much we receive here

@@ -43,11 +43,15 @@ int etcptpTestClient()
     }
 
 
+    i64 pkts = 0;
     i64 i = 1;
-    for(;;i++){
+    for(;i<16;i++){
         //Write to the connection
-        DBG("Client sending packet %li\n", i);
+        DBG("Client sending packet %li\n", pkts);
         etcpSend(sock,dat,&len);
+        if(len > 0){
+            pkts++;
+        }
 
         //Trigger an RX to see if there is an ack
         etcpRecv(sock,NULL,NULL);
@@ -80,11 +84,12 @@ int etcptpTestServer()
     }
 
 
-    while(1){
+    for(int i = 0; i < 50; i++){
         i8 data[128] = {0};
         i64 len = 128;
         etcpError_t recvErr = etcpETRYAGAIN;
         for(recvErr = etcpETRYAGAIN; recvErr == etcpETRYAGAIN; recvErr = etcpRecv(accSock,&data,&len)){
+            etcpSend(accSock,NULL,0);
             __asm__ __volatile__ ("pause"); //Tell CPU to relax
         }
 
@@ -122,50 +127,23 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datSt
     int i = datRxQ->rdMin;
     for(; i < datRxQ->rdMax; i++){
         cqSlot_t* slot = NULL;
-        cqError_t cqe = cqGet(datRxQ,&slot,i);
+        DBG("Getting slot/seq=%li\n", i);
+        cqError_t cqe = cqGetRd(datRxQ,&slot,i);
         if(cqe != cqENOERR){
             break;
         }
 
         etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
-        switch(head->fulltype){
-    //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
-            case ETCP_V1_FULLHEAD(ETCP_DAT):{
-                etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
-                DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
-                break;
-            }
-            case ETCP_V1_FULLHEAD(ETCP_ACK):{
-                etcpMsgSackHdr_t* const sackHdr = (etcpMsgSackHdr_t*)(head +1);
-                DBG("Got a sack packet with base seq no %li\n", sackHdr->sackBaseSeq);
-                break;
-            }
-            default:
-                WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
-                        head->magic, ETCP_MAGIC, head->ver, ETCP_V1, head->type);
-        }
+        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
+        DBG("Got a data packet with seq no %li packet status is %li\n", datHdr->seqNum, slot->valid);
 
     }
 
     llSlot_t* slot = NULL;
     for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; err = llGetNext(datStaleQ,&slot) ){
         etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
-        switch(head->fulltype){
-            //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
-            case ETCP_V1_FULLHEAD(ETCP_DAT):{
-                etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
-                DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
-                break;
-            }
-            case ETCP_V1_FULLHEAD(ETCP_ACK):{
-                etcpMsgSackHdr_t* const sackHdr = (etcpMsgSackHdr_t*)(head +1);
-                DBG("Got a sack packet with base seq no %li\n", sackHdr->sackBaseSeq);
-                break;
-            }
-            default:
-                WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
-                        head->magic, ETCP_MAGIC, head->ver, ETCP_V1, head->type);
-        }
+        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
+        DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
     }
 
     *maxAckPkts_o      = -1;

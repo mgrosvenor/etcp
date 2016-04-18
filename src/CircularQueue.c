@@ -56,6 +56,7 @@ cq_t* cqNew(const i64 buffSize, const i64 slotCountLog2)
     result->wrMin = 0;
     result->wrMax = result->rdSeq + result->__slotCount;
     result->rdMax = result->wrMin; //Pushing write forwards means there's more to read
+    result->available = result->__slotCount;
 
     return result;
 
@@ -72,11 +73,11 @@ cqError_t cqGet(const cq_t* const cq, cqSlot_t** slot_o, const i64 seqNum)
     }
 
     if_unlikely(seqNum < cq->rdSeq){
-        return cqERANGE;
+        return cqERANGELO;
     }
 
     if_unlikely(seqNum >= cq->rdSeq + cq->__slotCount ){
-        return cqERANGE;
+        return cqERANGEHI;
     }
 
     //Passed all the checks, this seqNumber is in the right range, turn it into a slot index.
@@ -103,9 +104,13 @@ cqError_t cqAdvWrSeq(cq_t* const cq)
 
     for(;; seqNum++){
         err = cqGet(cq, &slot, seqNum);
-        if_eqlikely(err == cqERANGE){ //Is it a valid slot?
+        if_eqlikely(err == cqERANGEHI){ //Is it a valid slot?
             //No. Can't advance the write pointer, it's overlapping with read pointer
             break;
+        }
+        else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+          FAT("Unexpected error: %s\n", cqError2Str(err) );
+          return cqEPANIC;
         }
 
         //Is the slot empty?
@@ -126,6 +131,7 @@ cqError_t cqAdvWrSeq(cq_t* const cq)
     cq->rdMax = cq->wrMin; //Pushing write forwards means there's more to read
     cq->outstanding--;
     cq->readable++;
+    cq->available--;
 
     return cqENOERR;
 }
@@ -141,7 +147,7 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
     cqError_t err = cqENOERR;
     i64 seqNum = cq->rdSeq;
 
-    //DBG("Trying to advance rdSeq stating at %li\n", seqNum);
+    DBG("Trying to advance rdSeq stating at %li\n", seqNum);
 
     for(;; seqNum++){
         //Can't advance the read pointer beyond the write pointer
@@ -150,8 +156,12 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
         }
 
         err = cqGet(cq, &slot, seqNum);
-        if_eqlikely(err == cqERANGE){ //Is it a valid slot?
+        if_eqlikely(err == cqERANGEHI){ //Is it a valid slot?
             FAT("This should never happen. Panic!\n");
+            return cqEPANIC;
+        }
+        else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+            FAT("Unexpected error: %s\n", cqError2Str(err) );
             return cqEPANIC;
         }
 
@@ -161,11 +171,14 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
         }
     }
 
-    //DBG("New rdSeq %li\n", seqNum);
+
 
     if_eqlikely(seqNum == cq->rdSeq){
+        DBG("Done with no change\n");
         return cqENOCHANGE;
     }
+
+    DBG("Done, new rdSeq %li\n", seqNum);
 
     cq->rdSeq = seqNum; //Write pointer has been advanced
     cq->rdMin = seqNum;
@@ -174,6 +187,7 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
     cq->wrRng = cq->wrMax - cq->wrMin; //Maximum writable capacity
     cq->rdRng = cq->rdMax - cq->rdMin; //Maximum readable capacity
     cq->readable--;
+    cq->available++;
 
     return cqENOERR;
 }
@@ -199,7 +213,8 @@ static char* errors[cqECOUNT] = {
     "No memory available",                  //cqENOMEM
     "No slots available",                   //cqENOSLOT
     "Payload was truncated",                //cqETRUNC
-    "Value is out of range",                //cqERANGE
+    "Value is out of range. Too high",      //cqERANGE
+    "Value is out of range. Too low",       //cqERANGE
     "Wrong slot selected",                  //cqEWRONGSLOT
     "PANIC! INTERNAL MEMROY OVERWRITTEN",   //cqEPANIC
     "Null parameter supplied",              //cqNULLPARAM
@@ -228,8 +243,12 @@ cqError_t cqPush(cq_t* const cq, const void* __restrict data, i64* const len_io,
 
     cqSlot_t* slot = NULL;
     cqError_t err = cqGet(cq,&slot,seqNum);
-    if_unlikely(err != cqENOERR){
-        return err;
+    if_unlikely(err == cqERANGEHI){
+        return cqENOSLOT;
+    }
+    else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+        FAT("Unexpected error: %s\n", cqError2Str(err) );
+        return cqEPANIC;
     }
 
     if(slot->valid){
@@ -257,8 +276,12 @@ cqError_t cqPull(cq_t* const cq, void* __restrict data, i64* const len_io, i64 c
 
     cqSlot_t* slot = NULL;
     cqError_t err = cqGet(cq,&slot,seqNum);
-    if_unlikely(err != cqENOERR){
-        return err;
+    if_unlikely(err == cqERANGEHI){
+        return cqENOSLOT;
+    }
+    else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+        FAT("Unexpected error: %s\n", cqError2Str(err) );
+        return cqEPANIC;
     }
 
     if(!slot->valid){
@@ -318,8 +341,12 @@ cqError_t cqGetNextWr(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum
     }
 
     cqError_t err = cqGet(cq,slot_o,cq->wrSeq);
-    if_unlikely(err == cqERANGE){
+    if_unlikely(err == cqERANGEHI){
         return cqENOSLOT;
+    }
+    else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+      FAT("Unexpected error: %s\n", cqError2Str(err) );
+      return cqEPANIC;
     }
 
     const cqSlot_t* slot = *slot_o;
@@ -346,8 +373,12 @@ cqError_t cqGetNextRd(cq_t* const cq, cqSlot_t** const slot_o, i64* const seqNum
     }
 
     cqError_t err = cqGet(cq,slot_o,cq->rdSeq);
-    if_unlikely(err == cqERANGE){
+    if_unlikely(err == cqERANGEHI){
         return cqENOSLOT;
+    }
+    else if_unlikely(err != cqENOERR){ //Is it a valid slot?
+        FAT("Unexpected error: %s\n", cqError2Str(err) );
+        return cqEPANIC;
     }
 
     const cqSlot_t* slot = *slot_o;
