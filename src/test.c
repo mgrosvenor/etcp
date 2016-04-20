@@ -48,11 +48,11 @@ int etcptpTestClient()
     for(;i<16000;i++){
         //Write to the connection
 
-        DBG("Client sending packet %li\n", pkts);
+        //DBG("Client sending packet %li\n", pkts);
         i64 toSendLen = len;
         etcpSend(sock,dat,&toSendLen);
         if(toSendLen > 0){
-            DBG("Sent %li bytes\n", toSendLen);
+            //DBG("Sent %li bytes\n", toSendLen);
             pkts++;
         }
 
@@ -102,7 +102,7 @@ int etcptpTestServer()
         }
 
 
-        DBG("Success! recevied %li bytes\n", len);
+        //DBG("Success! recevied %li bytes\n", len);
 //        for(int i = 0; i < 128; i++){
 //            printf("%i 0x%02x\n", i, (uint8_t)data[i]);
 //        }
@@ -126,28 +126,31 @@ void etcpRxTc(void* const rxTcState, const cq_t* const datRxQ, const ll_t* datSt
     (void)rxTcState;
     (void)datRxQ;
     (void)ackTxQ;
+    (void)datStaleQ;
 
-    int i = datRxQ->rdMin;
-    for(; i < datRxQ->rdMax; i++){
-        cqSlot_t* slot = NULL;
-        DBG("Getting slot/seq=%li\n", i);
-        cqError_t cqe = cqGetRd(datRxQ,&slot,i);
-        if(cqe != cqENOERR){
-            break;
-        }
 
-        etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
-        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
-        DBG("Got a data packet with seq no %li packet status is %li\n", datHdr->seqNum, slot->valid);
 
-    }
-
-    llSlot_t* slot = NULL;
-    for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; err = llGetNext(datStaleQ,&slot) ){
-        etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
-        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
-        DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
-    }
+//    int i = datRxQ->rdMin;
+//    for(; i < datRxQ->rdMax; i++){
+//        cqSlot_t* slot = NULL;
+//        //DBG("Getting slot/seq=%li\n", i);
+//        cqError_t cqe = cqGetRd(datRxQ,&slot,i);
+//        if(cqe != cqENOERR){
+//            break;
+//        }
+//
+//        etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
+//        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
+//        //DBG("Got a data packet with seq no %li packet status is %li\n", datHdr->seqNum, slot->valid ? 1 : 0);
+//
+//    }
+//
+//    llSlot_t* slot = NULL;
+//    for(llError_t err = llGetFirst(datStaleQ,&slot); err == llENOERR; err = llGetNext(datStaleQ,&slot) ){
+//        etcpMsgHead_t* const head = (etcpMsgHead_t* const)slot->buff;
+//        etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t*)(head +1);
+//        //DBG("Got a data packet with seq no %li\n", datHdr->seqNum);
+//    }
 
     *maxAckPkts_o      = -1;
     *maxAckSlots_o     = -1;
@@ -181,7 +184,7 @@ void etcpTxTc(void* const txTcState, const cq_t* const datTxQ, const cq_t* ackRx
     *maxAck_o = maxAck;
     *ackFirst = true;
 
-    const i64 retransmitTimeOut = 100 * 1000 * 1000LL; //1ms RTO timeout
+    const i64 retransmitTimeOut = 1000 * 1000LL; //1ms RTO timeout
     struct timespec ts = {0};
     clock_gettime(CLOCK_REALTIME,&ts);
     const i64 timeNowNs = ts.tv_sec * 1000 * 1000 * 1000 + ts.tv_nsec;

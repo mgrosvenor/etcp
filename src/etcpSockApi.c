@@ -37,7 +37,7 @@ typedef struct etcpSocket_s
     socketType_t type;
     union{
         etcpLAMap_t* la;  //For listening/acepting new connections
-        etcpSRConns_t sr; //For seding/receving on existing connections
+        etcpSRConns_t sr; //For sending/receving on existing connections
     };
 } etcpSocket_t;
 
@@ -316,14 +316,14 @@ etcpError_t etcpAccept(etcpSocket_t* const listenSock, etcpSocket_t** const acce
     i64 idx = -1;
     cqError_t err = cqPullNext(listenSock->la->listenQ,acceptSock_o,&len,&idx);
     if_unlikely(err != cqENOERR){
-        DBG("Unexpected error on cq %s\n", cqError2Str(err));
+        ERR("Unexpected error on cq %s\n", cqError2Str(err));
         return etcpECQERR;
     }
 
     //Ok we're done with the entry in the cq
     err = cqReleaseSlot(listenQ,idx);
     if_unlikely(err != cqENOERR){
-        DBG("Unexpected error on cq %s\n", cqError2Str(err));
+        ERR("Unexpected error on cq %s\n", cqError2Str(err));
         return etcpECQERR;
     }
 
@@ -340,7 +340,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     }
 
     if(toSendData != NULL && *toSendLen_io > 0){
-        DBG("Triggering user TX with packet of legth %li\n", *toSendLen_io);
+        //DBG("Triggering user TX with packet of legth %li\n", *toSendLen_io);
         doEtcpUserTx(sock->sr.sendConn,toSendData,toSendLen_io);
     }
 
@@ -354,7 +354,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     cq_t* recvRxQ = sock->sr.recvConn ? sock->sr.recvConn->rxQ : NULL; //Inboud DAT queue
 
     //If TX is event triggered then do it now, this is the event!
-    DBG("Running TX traffic control\n");
+    //DBG("Running TX traffic control\n");
     if(sock->etcpState->eventTriggeredTx){
         sock->etcpState->etcpTxTc(
                 sock->etcpState->etcpTxTcState,
@@ -370,7 +370,7 @@ etcpError_t etcpSend(etcpSocket_t* const sock, const void* const toSendData, i64
     maxAck = maxAck < 0 ? INT64_MAX : maxAck;
     maxDat = maxDat < 0 ? INT64_MAX : maxDat;
 
-    DBG("Running %li acks and %li dats, with ackfirst=%li\n",maxAck, maxDat,ackFirst );
+    DBG("Running %li acks and %li dats, with ackfirst=%li\n",maxAck, maxDat,ackFirst ? 1 : 0);
     if(maxAck > 0 || maxDat > 0){
         if_eqlikely(ackFirst){
             if_eqlikely(sock->sr.recvConn){
@@ -405,7 +405,7 @@ etcpError_t etcpRecv(etcpSocket_t* const sock, void* const data, i64* const len_
 
     //If RX is event triggered then do it now, this is the event!
     if(sock->sr.recvConn->rxQ->available == 0){ //There's no more RX slot, don't even bother
-        DBG("No RX slots available, not trying to RX\n");
+        WARN("No RX slots available, not trying to RX\n");
         return etcpETRYAGAIN;
     }
 

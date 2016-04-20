@@ -147,7 +147,7 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
     cqError_t err = cqENOERR;
     i64 seqNum = cq->rdSeq;
 
-    DBG("Trying to advance rdSeq stating at %li\n", seqNum);
+    //DBG("Trying to advance rdSeq stating at %li\n", seqNum);
 
     for(;; seqNum++){
         //Can't advance the read pointer beyond the write pointer
@@ -174,16 +174,16 @@ cqError_t cqAdvRdSeq(cq_t* const cq)
 
 
     if_eqlikely(seqNum == cq->rdSeq){
-        DBG("Done with no change\n");
+        //DBG("Done with no change\n");
         return cqENOCHANGE;
     }
 
-    DBG("Done, new rdSeq %li\n", seqNum);
+    //DBG("Done, new rdSeq %li\n", seqNum);
 
     cq->rdSeq = seqNum; //Write pointer has been advanced
     cq->rdMin = seqNum;
     cq->rdMax = cq->wrMin + 1;
-    cq->wrMax = cq->wrMin + cq->__slotCount; //... but it does advance this
+    cq->wrMax = cq->rdMin + cq->__slotCount; //... but it does advance this
     cq->wrRng = cq->wrMax - cq->wrMin; //Maximum writable capacity
     cq->rdRng = cq->rdMax - cq->rdMin; //Maximum readable capacity
     cq->readable--;

@@ -36,7 +36,7 @@
 
 static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
 {
-    DBG("Working on new data message with type = 0x%016x\n", head->type);
+    //DBG("Working on new data message with type = 0x%016x\n", head->type);
 
     const i64 minSizeDatHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
     if_unlikely(len < minSizeDatHdr){
@@ -44,7 +44,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
     etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
-    DBG("Working on new data message with seq = 0x%016x\n", datHdr->seqNum);
+    //DBG("Working on new data message with seq = 0x%016x\n", datHdr->seqNum);
 
     //Got a valid data header, more sanity checking
     const uint64_t datLen = len - minSizeDatHdr;
@@ -52,18 +52,18 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         WARN("Data length has unexpected value. Expected %li, but got %li\n",datLen, datHdr->datLen);
         return etcpEBADPKT;
     }
-    DBG("Working on new data message with len = %li\n", datHdr->datLen);
+    //DBG("Working on new data message with len = %li\n", datHdr->datLen);
 
     //Find the source map for this packet
     const htKey_t dstKey = {.keyHi = flowId->dstAddr, .keyLo = flowId->dstPort };
     etcpLAMap_t* srcsMap = NULL;
     htError_t htErr = htGet(state->dstMap,&dstKey,(void**)&srcsMap);
     if_unlikely(htErr == htENOTFOUND){
-        DBG("Packet unexpected. No one listening to Add=%li, Port=%li\n", flowId->dstAddr, flowId->dstPort);
+        WARN("Packet unexpected. No one listening to Add=%li, Port=%li\n", flowId->dstAddr, flowId->dstPort);
         return etcpEREJCONN;
     }
     else if_unlikely(htErr != htENOEROR){
-        DBG("Unexpected hash table error: %s\n", htError2Str(htErr));
+        ERR("Unexpected hash table error: %s\n", htError2Str(htErr));
         return etcpEHTERR;
     }
 
@@ -75,7 +75,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     if(htErr == htENOTFOUND){
         etcpError_t err = addNewConn(state, srcsMap, flowId, datHdr->noRet, &recvConn, &sendConn);
         if_unlikely(err != etcpENOERR){
-            DBG("Error trying to add new connection\n");
+            ERR("Error trying to add new connection\n");
             return err;
         }
     }
@@ -84,7 +84,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     const i64 seqPkt        = datHdr->seqNum;
     const i64 seqMin        = recvConn->rxQ->rdMin; //The very minimum sequence number that we will consider
     const i64 seqMax        = recvConn->rxQ->wrMax; //One greater than the biggest seq we can handle
-    DBG("seqPkt = %li, seqMin= %li, seqMax = %li\n",
+    DBG("Got dat packet seqPkt = %li, seqMin= %li, seqMax = %li\n",
         seqPkt,
         seqMin,
         seqMax
@@ -94,7 +94,7 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
     //-- if seq >= seqMax, it is beyond the end of the rx window, ignore it, the packet will be sent again
     //-- if seq < seqMin, it has already been ack'd, the ack must have got lost, send another ack
     if_unlikely(seqPkt >= seqMax){
-        WARN("Ignoring packet, seqPkt %li > %li seqMax, packet will not fit in window\n", seqPkt, seqMax);
+        FAT("Ignoring packet, seqPkt %li >= %li seqMax, packet will not fit in window\n", seqPkt, seqMax);
         return etcpERANGE;
     }
 
@@ -149,9 +149,9 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
 static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, const etcpTime_t* const ackTime, const etcpTime_t* const datFirstTime, const etcpTime_t* const datLastTime)
 {
-    DBG("Processing ack for seq=%li\n", seq);
+    //DBG("Processing ack for seq=%li\n", seq);
     if(seq < (uint64_t)cq->rdMin){
-        DBG("Stale ack, this ack has already been accepted\n");
+        WARN("Stale ack, this ack has already been accepted\n");
         return etcpENOERR;
     }
 
@@ -208,7 +208,7 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
 
 static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHead_t* head, const i64 msgLen, const etcpFlowId_t* const flowId)
 {
-    DBG("Working on new ack message\n");
+    //DBG("Working on new ack message\n");
 
     const i64 minSizeSackHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgSackHdr_t);
     if_unlikely(msgLen < minSizeSackHdr){
@@ -230,11 +230,11 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
     etcpLAMap_t* srcsMap = NULL;
     htError_t htErr = htGet(state->dstMap,&dstKey,(void**)&srcsMap);
     if_unlikely(htErr == htENOTFOUND){
-        DBG("Ack unexpected. No one listening to destination addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
+        ERR("Ack unexpected. No one listening to destination addr=%li, port=%li\n", flowId->srcAddr, flowId->srcPort);
         return etcpEREJCONN;
     }
     else if_unlikely(htErr != htENOEROR){
-        DBG("Hash table error: %s\n", htError2Str(htErr));
+        ERR("Hash table error: %s\n", htError2Str(htErr));
         return etcpEHTERR;
     }
 
@@ -243,11 +243,11 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
     const htKey_t srcKey = { .keyHi = flowId->dstAddr, .keyLo = flowId->dstPort }; //Flip these for an ack packet
     htErr = htGet(srcsMap->table,&srcKey,(void**)&conn);
     if_unlikely(htErr == htENOTFOUND){
-        DBG("Ack unexpected. No one listening to source addr=%li, port=%li\n", flowId->dstAddr, flowId->dstPort);
+        ERR("Ack unexpected. No one listening to source addr=%li, port=%li\n", flowId->dstAddr, flowId->dstPort);
         return etcpEREJCONN;
     }
     else if_unlikely(htErr != htENOEROR){
-        DBG("Hash table error: %s\n", htError2Str(htErr));
+        ERR("Hash table error: %s\n", htError2Str(htErr));
         return etcpEHTERR;
     }
 
@@ -265,9 +265,9 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
     //Process the acks and apply to TX packets waiting.
     const uint64_t sackBaseSeq = sackHdr->sackBaseSeq;
     for(i64 sackIdx = 0; sackIdx < sackHdr->sackCount; sackIdx++){
-        const uint16_t ackOffset = sackFields[sackIdx].offset;
-        const uint16_t ackCount  = sackFields[sackIdx].count;
-        DBG("Working on %lli ACKs starting at %li \n", ackCount, sackBaseSeq + ackOffset);
+        const uint64_t ackOffset = sackFields[sackIdx].offset;
+        const uint64_t ackCount  = sackFields[sackIdx].count;
+        DBG("Working on %li ACKs starting at %li \n", ackCount, sackBaseSeq + ackOffset);
         for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
             const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
             etcpProcessAck(conn->txQ,ackSeq,&head->ts, &sackHdr->timeFirst, &sackHdr->timeLast);
@@ -373,11 +373,11 @@ static inline  etcpError_t etcpOnRxEthernetFrame(etcpState_t* const state, const
 
 static inline etcpError_t etcpMkEthPkt(void* const buff, i64* const len_io, const uint64_t srcAddr, const uint64_t dstAddr, const i16 vlan, const uint8_t priority )
 {
-    DBG("Making ethernet packet with source address=0x%016lx, dstAddr=0x%016lx, vlan=%i, priority=%i\n",
-            srcAddr,
-            dstAddr,
-            vlan,
-            priority);
+//    DBG("Making ethernet packet with source address=0x%016lx, dstAddr=0x%016lx, vlan=%i, priority=%i\n",
+//            srcAddr,
+//            dstAddr,
+//            vlan,
+//            priority);
 
     const i64 len = *len_io;
     if_unlikely(len < ETH_ZLEN){
@@ -415,7 +415,7 @@ static inline etcpError_t pushSackEthPacket(etcpConn_t* const conn, const i8* co
     i64 seqNum;
     cqError_t cqErr = cqGetNextWr(conn->txQ, &slot,&seqNum);
     if_unlikely(cqErr == cqENOSLOT){
-        DBG("Ran out of ACK queue slots\n");
+        WARN("Ran out of ACK queue slots\n");
         return etcpETRYAGAIN;
     }
     else if_unlikely(cqErr != cqENOERR){
@@ -492,7 +492,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         return etcpENOERR; //There's nothing to do here
     }
 
-    DBG("Generating at most %li stale sack packets from %li slots\n", maxAckPackets, maxSlots);
+    //DBG("Generating at most %li stale sack packets from %li slots\n", maxAckPackets, maxSlots);
 
     i64 fieldIdx          = 0;
     bool fieldInProgress  = false;
@@ -547,7 +547,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         }
         const i64 seqNum = slot->seqNum;
 
-        DBG("Now looking at seq %i, expected=%li\n", seqNum, expectSeqNum);
+        //DBG("Now looking at seq %i, expected=%li\n", seqNum, expectSeqNum);
 
         if_unlikely(seqNum < expectSeqNum){
             if(seqNum == expectSeqNum -1){
@@ -594,7 +594,7 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1;
         expectSeqNum++;
-        DBG("Accepted sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
+        DBG("Made stale sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
     }
 
     //Push the last sack out
@@ -673,7 +673,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         }
 
 
-        DBG("Now looking at seq %i\n", i);
+        //DBG("Now looking at seq %i\n", i);
         cqSlot_t* slot = NULL;
         const cqError_t err = cqGetRd(conn->rxQ,&slot,i);
 
@@ -730,7 +730,7 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         sackFields[fieldIdx].count++;
         sackHdr->timeLast = head->ts;
         datHdr->ackSent = 1; //Mark the packet as ack-sent so it will get delivered to users
-        DBG("Accepted sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
+        DBG("Made sack for seq=%li in field %li, offset=%i, count=%i, off + count=%i\n", i,fieldIdx, sackFields[fieldIdx].offset, sackFields[fieldIdx].count, sackFields[fieldIdx].offset + sackFields[fieldIdx].count );
     }
 
     //Push the last sack out
@@ -772,19 +772,19 @@ etcpError_t doEtcpNetTx(cq_t* const cq, const etcpState_t* const state, const i6
             return etcpECQERR;
         }
 
-        DBG("Trying to send seq/slot %li\n", i);
+        //DBG("Trying to send seq/slot %li\n", i);
 
         //We've now got a valid slot with a packet in it, grab it and see if the TC has decided it should be sent?
         pBuff_t* const pBuff = slot->buff;
 
         if_eqlikely(pBuff->txState == ETCP_TX_DRP ){
             //We're told to drop the packet. Release it and continue
-            DBG("Dropping seq/slot %li\n", i);
+            WARN("Dropping seq/slot %li\n", i);
             cqReleaseSlot(cq,i);
             continue;
         }
         else if_unlikely(pBuff->txState != ETCP_TX_NOW ){
-            DBG("Ingnoring seq/slot %li\n", i);
+            WARN("Ingnoring seq/slot %li waiting for ack\n", i);
             continue; //Not ready to send this packet now.
         }
 
@@ -901,7 +901,7 @@ i64 doEtcpNetRx(etcpState_t* state)
 etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* const len_io)
 {
 
-    DBG("Doing user rx\n");
+    //DBG("Doing user rx\n");
     while(1){
         i64 seqNum = -1;
         cqSlot_t* slot;
@@ -914,7 +914,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
             ERR("Error on circular buffer: %s\n", cqError2Str(cqErr));
             return etcpECQERR;
         }
-        DBG("Got packet with sequence number %li\n",seqNum);
+        //DBG("Got packet with sequence number %li\n",seqNum);
 
         const i64 msgHdrs = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
         if_unlikely(slot->len < msgHdrs){
@@ -932,7 +932,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
 
         //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){
-            DBG("Packet has not been ack'd\n");
+            //DBG("Packet has not been ack'd\n");
             return etcpETRYAGAIN; //Ack has not yet been made for this, cannot give over to the user until it has
         }
 
@@ -955,6 +955,7 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
 
         DBG("Packet with seq=%li and len=%li given to user\n", seqNum, *len_io);
         //We've copied a valid packet and released it, the user can have it now
+        DBG("New rd_min=%li, wr_max=%li\n", conn->rxQ->rdMin, conn->rxQ->wrMax);
         return etcpENOERR;
     }
 
@@ -967,20 +968,20 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
 etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i64* const toSendLen_io)
 
 {
-    DBG("Doing user tx, with %li bytes to send\n", *toSendLen_io);
+    //DBG("Doing user tx, with %li bytes to send\n", *toSendLen_io);
     const i64 toSendLen = *toSendLen_io;
     i64 bytesSent = 0;
 
     cq_t* const txcq = conn->txQ;
     while(bytesSent< toSendLen){
-        DBG("Bytes sent so far = %lli\n", bytesSent);
+        //DBG("Bytes sent so far = %lli\n", bytesSent);
         cqSlot_t* slot = NULL;
         i64 seqNum = 0;
         cqError_t cqErr = cqGetNextWr(txcq,&slot,&seqNum);
 
         //We haven't sent as much as we'd hoped, set the len_io and tell user to try again
         if_unlikely(cqErr == cqENOSLOT){
-            DBG("Ran out of CQ slots\n");
+            //DBG("Ran out of CQ slots\n");
             *toSendLen_io = bytesSent;
             return etcpETRYAGAIN;
         }
@@ -989,7 +990,7 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
             ERR("Error on circular queue: %s", cqError2Str(cqErr));
             return etcpECQERR;
         }
-        DBG("Got a new CQ slot\n");
+        //DBG("Got a new CQ slot\n");
 
         //We got a slot, now format a pBuff into it
         pBuff_t* pBuff  = slot->buff;
@@ -1046,7 +1047,7 @@ etcpError_t doEtcpUserTx(etcpConn_t* const conn, const void* const toSendData, i
         pBuff->etcpPayload = msgDat;
         pBuff->etcpPayloadSize = sizeof(datLen);
 
-        DBG("Copying %li payload to data\n", datLen);
+        //DBG("Copying %li payload to data\n", datLen);
         memcpy(msgDat,toSendData,datLen);
 
         pBuff->txState = ETCP_TX_RDY; //Packet is ready to be sent, subject to Transmission Control.
