@@ -34,20 +34,21 @@
 #include "etcpSockApi.h"
 
 
-static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHead_t* head, const i64 len, const etcpFlowId_t* const flowId)
+static inline etcpError_t etcpOnRxDat(etcpState_t* const state, pBuff_t* const pbuff, const etcpFlowId_t* const flowId)
 {
     //DBG("Working on new data message with type = 0x%016x\n", head->type);
 
-    const i64 minSizeDatHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
-    if_unlikely(len < minSizeDatHdr){
-        WARN("Not enough bytes to parse data header, required %li but got %li\n", minSizeDatHdr, len);
+    const i64 msgSpace = pbuff->msgSize - pbuff->encapHdrSize - pbuff->etcpHdrSize;
+    const i64 minSizeDatHdr = sizeof(etcpMsgDatHdr_t);
+    if_unlikely(pbuff->msgSize - pbuff->encapHdrSize - pbuff->etcpHdrSize  < minSizeDatHdr){
+        WARN("Not enough bytes to parse data header, required %li but got %li\n", minSizeDatHdr, msgSpace);
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
-    etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head + 1);
+    etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(pbuff->etcpDatHdr + 1);
     //DBG("Working on new data message with seq = 0x%016x\n", datHdr->seqNum);
 
     //Got a valid data header, more sanity checking
-    const uint64_t datLen = len - minSizeDatHdr;
+    const uint64_t datLen = msgSpace - minSizeDatHdr;
     if_unlikely(datLen != datHdr->datLen){
         WARN("Data length has unexpected value. Expected %li, but got %li\n",datLen, datHdr->datLen);
         return etcpEBADPKT;
@@ -110,10 +111,10 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
         //hold up new TX's
         //Note: This is a slow-path, a ordered push to a LL O(n) + malloc() is more costly a push to the CQ O(c).
 
-        i64 toCopy    = len; //By now this value has been checked to be right
+        const i64 toCopy = pbuff->buffSize + sizeof(pBuff_t); //Include the size of pbuff header so that we can copy the whole thing
         i64 toCopyTmp = toCopy;
         datHdr->staleDat = 1; //Mark the packet as stale so we don't try to deliver again to user
-        llError_t err = llPushSeqOrd(recvConn->staleQ,head,&toCopyTmp,seqPkt);
+        llError_t err = llPushSeqOrd(recvConn->staleQ,pbuff,&toCopyTmp,seqPkt);
         if_unlikely(err == llETRUNC){
             WARN("Payload (%liB) is too big for slot (%liB), truncating\n", toCopy, toCopyTmp );
         }
@@ -126,9 +127,9 @@ static inline etcpError_t etcpOnRxDat(etcpState_t* const state, const etcpMsgHea
 
     }
 
-    i64 toCopy    = len; //By now this value has been checked to be right
+    const i64 toCopy = pbuff->buffSize + sizeof(pBuff_t); //Include the size of pbuff header so that we can copy the whole thing
     i64 toCopyTmp = toCopy;
-    cqError_t err = cqPush(recvConn->rxQ,head,&toCopyTmp,seqPkt);
+    cqError_t err = cqPush(recvConn->rxQ,pbuff,&toCopyTmp,seqPkt);
 
     if_unlikely(err == cqENOSLOT){
         WARN("Unexpected state, packet not enough space in queue\n");
@@ -206,24 +207,28 @@ static inline  etcpError_t etcpProcessAck(cq_t* const cq, const uint64_t seq, co
 
 
 
-static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHead_t* head, const i64 msgLen, const etcpFlowId_t* const flowId)
+static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, pBuff_t* const pbuff, const etcpFlowId_t* const flowId)
 {
     //DBG("Working on new ack message\n");
 
-    const i64 minSizeSackHdr = sizeof(etcpMsgHead_t) + sizeof(etcpMsgSackHdr_t);
-    if_unlikely(msgLen < minSizeSackHdr){
-        WARN("Not enough bytes to parse sack header, required %li but got %li\n", minSizeSackHdr, msgLen);
+    const i64 minSizeSackHdr = sizeof(etcpMsgSackHdr_t);
+    const i64 msgSpace = pbuff->msgSize - pbuff->encapHdrSize - pbuff->etcpDatHdrSize;
+    if_unlikely(msgSpace < minSizeSackHdr){
+        WARN("Not enough bytes to parse sack header, required %li but got %li\n", minSizeSackHdr, msgSpace);
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
 
     //Got a valid sack header, more sanity checking
-    const etcpMsgSackHdr_t* const sackHdr = (const etcpMsgSackHdr_t* const)(head + 1);
-    const i64 sackLen = msgLen - minSizeSackHdr;
+    etcpMsgSackHdr_t* const sackHdr = (etcpMsgSackHdr_t* const)(pbuff->etcpHdr + 1);
+    const i64 sackLen       = msgSpace - minSizeSackHdr;
+    pbuff->etcpSackHdr      = sackHdr;
+    pbuff->etcpSackHdrSize  = sackLen;
     if_unlikely(sackLen != sackHdr->sackCount * sizeof(etcpSackField_t)){
         WARN("Sack length has unexpected value. Expected %li, but got %li\n",sackLen, sackHdr->sackCount * sizeof(etcpSackField_t));
         return etcpEBADPKT;
     }
     etcpSackField_t* const sackFields = (etcpSackField_t* const)(sackHdr + 1);
+
 
     //Find the source map for this packet
     const htKey_t dstKey = {.keyHi = flowId->srcAddr, .keyLo = flowId->srcPort }; //Since this is an ack, we swap src / dst
@@ -252,10 +257,11 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
     }
 
     //By now we have located the connection structure for this ack packet
-    //Try to put the sack into the AckRxQ so that the Tranmission Control function can use it as an input
+    //Try to put the sack into the AckRxQ so that the Transmission Control function can use it as an input
     i64 slotIdx = -1;
-    i64 len = sackLen;
-    cqPushNext(conn->rxQ,sackHdr, &len,&slotIdx); //No error checking it's ok if this fails.
+    i64 len    = pbuff->buffSize + sizeof(pBuff_t);
+    i64 lenTmp = sackLen;
+    cqPushNext(conn->rxQ,sackHdr, &lenTmp,&slotIdx); //No error checking it's ok if this fails.
     if(len < sackLen){
         WARN("Truncated SACK packet into ackRxQ\n");
     }
@@ -270,7 +276,7 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
         DBG("Working on %li ACKs starting at %li \n", ackCount, sackBaseSeq + ackOffset);
         for(uint16_t ackIdx = 0; ackIdx < ackCount; ackIdx++){
             const uint64_t ackSeq = sackBaseSeq + ackOffset + ackIdx;
-            etcpProcessAck(conn->txQ,ackSeq,&head->ts, &sackHdr->timeFirst, &sackHdr->timeLast);
+            etcpProcessAck(conn->txQ,ackSeq,&pbuff->etcpHdr->ts, &sackHdr->timeFirst, &sackHdr->timeLast);
         }
     }
 
@@ -280,15 +286,15 @@ static inline  etcpError_t etcpOnRxAck(etcpState_t* const state, const etcpMsgHe
 
 
 
-static inline  etcpError_t etcpOnRxPacket(etcpState_t* const state, const void* packet, const i64 len, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxPacket(etcpState_t* const state, pBuff_t* const pbuff, i64 srcAddr, i64 dstAddr, i64 hwRxTimeNs)
 {
     //First sanity check the packet
     const i64 minSizeHdr = sizeof(etcpMsgHead_t);
-    if_unlikely(len < minSizeHdr){
+    if_unlikely(pbuff->msgSize - pbuff->encapHdrSize < minSizeHdr){
         WARN("Not enough bytes to parse ETCP header\n");
         return etcpEBADPKT; //Bad packet, not enough data in it
     }
-    etcpMsgHead_t* const head = (etcpMsgHead_t* const)packet;
+    etcpMsgHead_t* const head = pbuff->etcpHdr;
 
     //Get a timestamp as soon as we know we have a place to put it.
     struct timespec ts = {0};
@@ -310,10 +316,10 @@ static inline  etcpError_t etcpOnRxPacket(etcpState_t* const state, const void* 
     switch(head->fulltype){
 //        case ETCP_V1_FULLHEAD(ETCP_FIN): //XXX TODO, currently only the send side can disconnect...
         case ETCP_V1_FULLHEAD(ETCP_DAT):
-            return etcpOnRxDat(state, head, len, &flowId);
+            return etcpOnRxDat(state, pbuff, &flowId);
 
         case ETCP_V1_FULLHEAD(ETCP_ACK):
-            return etcpOnRxAck(state, head, len, &flowId);
+            return etcpOnRxAck(state, pbuff, &flowId);
 
         default:
             WARN("Bad header, unrecognised type msg_magic=%li (should be %li), version=%i (should be=%i), type=%li\n",
@@ -336,32 +342,37 @@ typedef struct __attribute__((packed)){
 //The expected transport for ETCP is Ethernet, but really it doesn't care. PCIE/IPV4/6 could work as well.
 //This function codes the assumes an Ethernet frame, supplied with a frame check sequence to the ETCP processor.
 //It expects that an out-of-band hardware timestamp is also passed in.
-static inline  etcpError_t etcpOnRxEthernetFrame(etcpState_t* const state, const void* const frame, const i64 len, i64 hwRxTimeNs)
+static inline  etcpError_t etcpOnRxEthernetFrame(etcpState_t* const state, pBuff_t* const pbuff, i64 hwRxTimeNs)
 {
     const i64 minSizeEHdr = ETH_HLEN + ETH_FCS_LEN;
-       if_unlikely(len < minSizeEHdr){
-           WARN("Not enough bytes to parse Ethernet header, expected at least %li but got %li\n", minSizeEHdr, len);
+       if_unlikely(pbuff->msgSize < minSizeEHdr){
+           WARN("Not enough bytes to parse Ethernet header, expected at least %li but got %li\n", minSizeEHdr, pbuff->msgSize);
            return etcpEBADPKT; //Bad packet, not enough data in it
        }
-       struct ethhdr* const eHead = (struct ethhdr* const) frame ;
+       struct ethhdr* const eHead = (struct ethhdr* const) pbuff->buffer ;
+       pbuff->encapHdr = eHead;
+
        uint64_t dstAddr = 0;
        memcpy(&dstAddr, eHead->h_dest, ETH_ALEN);
        uint64_t srcAddr = 0;
        memcpy(&srcAddr, eHead->h_source, ETH_ALEN);
        uint16_t proto = ntohs(eHead->h_proto);
 
-       const void* packet = (void* const)(eHead + 1);
-       i64 etcpPacketLen      = len - ETH_HLEN - ETH_FCS_LEN;
+       pbuff->etcpHdr = (void*)(eHead + 1);
+       pbuff->etcpHdrSize = sizeof(etcpMsgHead_t);
+       i64 etcpPacketLen      = pbuff->msgSize - ETH_HLEN - ETH_FCS_LEN;
 
        if_likely(proto == ETH_P_ECTP ){
-           return etcpOnRxPacket(state, packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
+           pbuff->encapHdrSize = ETH_HLEN + ETH_FCS_LEN;
+           return etcpOnRxPacket(state,pbuff,srcAddr,dstAddr, hwRxTimeNs);
        }
 
        //This is a VLAN tagged packet we can handle these too
        if_likely(proto == ETH_P_8021Q){
-           packet        = ((uint8_t*)packet + sizeof(eth8021qTCI_t));
-           etcpPacketLen = len - sizeof(eth8021qTCI_t);
-           return etcpOnRxPacket(state, packet,etcpPacketLen,srcAddr,dstAddr, hwRxTimeNs);
+           pbuff->etcpHdr      = (void*)((uint8_t*)pbuff->etcpHdr + sizeof(eth8021qTCI_t));
+           etcpPacketLen       = pbuff->msgSize - sizeof(eth8021qTCI_t);
+           pbuff->encapHdrSize = ETH_HLEN + ETH_FCS_LEN + sizeof(eth8021qTCI_t);
+           return etcpOnRxPacket(state, pbuff,srcAddr,dstAddr, hwRxTimeNs);
        }
 
        WARN("Unknown EtherType 0x%04x\n", proto);
@@ -572,9 +583,9 @@ etcpError_t generateStaleAcks(etcpConn_t* const conn, const i64 maxAckPackets, c
         }
 
         //At this point we have a valid packet
-        const i8* const slotBuff            = slot->buff;
-        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
-        etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
+        const pBuff_t* const pbuff          = slot->buff;
+        const etcpMsgHead_t* const head     = pbuff->etcpHdr;
+        etcpMsgDatHdr_t* const datHdr       = pbuff->etcpDatHdr;
 
         //Start a new field
         if_unlikely(!fieldInProgress){
@@ -692,9 +703,9 @@ etcpError_t generateAcks(etcpConn_t* const conn, const i64 maxAckPackets, const 
         }
 
         //At this point we have a valid packet
-        const i8* const slotBuff            = slot->buff;
-        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slotBuff);
-        etcpMsgDatHdr_t* const datHdr       = (etcpMsgDatHdr_t* const)(head +1);
+        const pBuff_t* const pbuff          = slot->buff;
+        const etcpMsgHead_t* const head     = pbuff->etcpHdr;
+        etcpMsgDatHdr_t* const datHdr       = pbuff->etcpDatHdr;
 
         if_eqlikely(datHdr->ackSent){
             //This packet has been processed and ack'd, we're just waiting for it to be cleared from the window by a user RX
@@ -875,12 +886,19 @@ i64 doEtcpNetRx(etcpState_t* state)
     i64 result = 0;
     i8 frameBuff[MAX_FRAME] = {0}; //This is crap, should have a frame pool, from which pointers can be taken and then
                                    //inserted into the CQ structure rather than copying. This would make the whole
-                                   //stack 0/1-copy.
-    uint64_t hwRxTimeNs = 0;
-    i64 rxLen = state->ethHwRx(state->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs);
-    for(; rxLen > 0; rxLen = state->ethHwRx(state->ethHwState,frameBuff,MAX_FRAME, &hwRxTimeNs)){
+                                   //stack 0/1-copy. The reason it's not done this way right now is beacuse
 
-        etcpError_t err = etcpOnRxEthernetFrame(state, frameBuff,rxLen, hwRxTimeNs);
+    pBuff_t* pbuff = (pBuff_t*)frameBuff;
+    pbuff->buffer = pbuff + 1;
+    pbuff->buffSize = MAX_FRAME - sizeof(pbuff);
+    assert(pbuff->buffSize > 0);
+
+    uint64_t hwRxTimeNs = 0;
+    i64 rxLen = state->ethHwRx(state->ethHwState,pbuff->buffer,pbuff->buffSize, &hwRxTimeNs);
+    pbuff->msgSize = rxLen;
+    for(; rxLen > 0; rxLen = state->ethHwRx(state->ethHwState,pbuff->buffer,pbuff->buffSize,&hwRxTimeNs)){
+        pbuff->msgSize = rxLen;
+        etcpError_t err = etcpOnRxEthernetFrame(state, pbuff, hwRxTimeNs);
         result++;
         if_unlikely(err == etcpETRYAGAIN){
             WARN("Ring is full\n");
@@ -916,19 +934,9 @@ etcpError_t doEtcpUserRx(etcpConn_t* const conn, void* __restrict data, i64* con
         }
         //DBG("Got packet with sequence number %li\n",seqNum);
 
-        const i64 msgHdrs = sizeof(etcpMsgHead_t) + sizeof(etcpMsgDatHdr_t);
-        if_unlikely(slot->len < msgHdrs){
-            ERR("Packet too small for headers %li < %li\n", slot->len, msgHdrs );
-            cqReleaseSlot(conn->rxQ,seqNum);
-            return etcpEBADPKT;
-        }
 
-        const etcpMsgHead_t* const head     = (etcpMsgHead_t* const)(slot->buff);
-        const etcpMsgDatHdr_t* const datHdr = (etcpMsgDatHdr_t* const)(head +1);
-        if_unlikely(slot->len - msgHdrs < datHdr->datLen){
-            ERR("Packet too small for payload, required %li but got %li", datHdr->datLen,slot->len - msgHdrs );
-            return etcpEBADPKT;
-        }
+        const pBuff_t* pbuff = slot->buff;
+        const etcpMsgDatHdr_t* const datHdr =  pbuff->etcpDatHdr;
 
         //We have a valid packet, but it might be stale, or not yet ack'd
         if(!datHdr->ackSent){

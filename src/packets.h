@@ -132,7 +132,7 @@ typedef struct {
 
     void* buffer;
     i64 buffSize; //Size of the buffer area to work in
-    i64 msgSize;  //Size of the final message
+    i64 msgSize;  //Size of the actual message in the buffer
 
     void* encapHdr;
     i64 encapHdrSize;
